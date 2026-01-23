@@ -1,0 +1,15 @@
+python decompose.py --data_root_path ../data/normalized_models --result_path ../data/meshdata --object_code cuboid2 --coacd_path ./CoACD/build/main
+python decompose.py --data_root_path ../data/normalized_models --result_path ../data/meshdata --object_code sphere2 --coacd_path ./CoACD/build/main
+python decompose.py --data_root_path ../data/normalized_models --result_path ../data/meshdata --object_code sphere1 --coacd_path ./CoACD/build/main
+python decompose.py --data_root_path ../data/normalized_models --result_path ../data/meshdata --object_code cube1 --coacd_path ./CoACD/build/main
+python decompose.py --data_root_path ../data/normalized_models --result_path ../data/meshdata --object_code cylinder5 --coacd_path ./CoACD/build/main
+python decompose.py --data_root_path ../data/normalized_models --result_path ../data/meshdata --object_code cylinder2 --coacd_path ./CoACD/build/main
+python decompose.py --data_root_path ../data/normalized_models --result_path ../data/meshdata --object_code cuboid3 --coacd_path ./CoACD/build/main
+python decompose.py --data_root_path ../data/normalized_models --result_path ../data/meshdata --object_code cuboid1 --coacd_path ./CoACD/build/main
+python decompose.py --data_root_path ../data/normalized_models --result_path ../data/meshdata --object_code cylinder3 --coacd_path ./CoACD/build/main
+python decompose.py --data_root_path ../data/normalized_models --result_path ../data/meshdata --object_code cylinder1 --coacd_path ./CoACD/build/main
+python decompose.py --data_root_path ../data/normalized_models --result_path ../data/meshdata --object_code mayonnaisebottle --coacd_path ./CoACD/build/main
+python decompose.py --data_root_path ../data/normalized_models --result_path ../data/meshdata --object_code cube2 --coacd_path ./CoACD/build/main
+python decompose.py --data_root_path ../data/normalized_models --result_path ../data/meshdata --object_code cylinder6 --coacd_path ./CoACD/build/main
+python decompose.py --data_root_path ../data/normalized_models --result_path ../data/meshdata --object_code sphere3 --coacd_path ./CoACD/build/main
+python decompose.py --data_root_path ../data/normalized_models --result_path ../data/meshdata --object_code banana --coacd_path ./CoACD/build/main

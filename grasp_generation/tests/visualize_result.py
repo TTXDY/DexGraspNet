@@ -7,8 +7,14 @@ Description: visualize grasp result using plotly.graph_objects
 import os
 import sys
 
-os.chdir(os.path.dirname(os.path.dirname(__file__)))
-sys.path.append(os.path.dirname(os.path.dirname(__file__)))
+# Get the parent directory (grasp_generation/)
+if __file__ and os.path.dirname(__file__):
+    parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+else:
+    parent_dir = os.path.abspath('..')
+
+os.chdir(parent_dir)
+sys.path.insert(0, parent_dir)
 
 import argparse
 import torch
@@ -82,4 +88,11 @@ if __name__ == '__main__':
         result = f'Index {args.num}  scale {scale}  E_fc {E_fc}  E_dis {E_dis}  E_pen {E_pen}  E_prior {E_prior}  E_spen {E_spen}'
         fig.add_annotation(text=result, x=0.5, y=0.1, xref='paper', yref='paper')
     fig.update_layout(scene_aspectmode='data')
+
+    # Save to HTML file for viewing
+    output_file = f'grasp_visualization_{args.object_code}_{args.num}.html'
+    fig.write_html(output_file)
+    print(f'Visualization saved to: {output_file}')
+
+    # Also try to show in browser
     fig.show()

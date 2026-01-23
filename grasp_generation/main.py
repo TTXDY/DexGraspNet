@@ -6,7 +6,8 @@ Description: Entry of the program, generate small-scale experiments
 
 import os
 
-os.chdir(os.path.dirname(__file__))
+if __file__ and os.path.dirname(__file__):
+    os.chdir(os.path.dirname(__file__))
 os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 
 import argparse
@@ -37,7 +38,7 @@ parser.add_argument('--object_code_list', default=
         'sem-Hammer-5d4da30b8c0eaae46d7014c7d6ce68fc',
         'core-mug-1a1c0a8d4bad82169f0594e65f756cf5',
         'core-bottle-1ffd7113492d375593202bf99dddc268',
-    ], type=list)
+    ], type=str)
 parser.add_argument('--name', default='exp_32', type=str)
 parser.add_argument('--n_contact', default=4, type=int)
 parser.add_argument('--batch_size', default=128, type=int)
@@ -66,6 +67,11 @@ parser.add_argument('--thres_dis', default=0.005, type=float)
 parser.add_argument('--thres_pen', default=0.001, type=float)
 
 args = parser.parse_args()
+
+# Parse object_code_list if it's a string
+if isinstance(args.object_code_list, str):
+    import ast
+    args.object_code_list = ast.literal_eval(args.object_code_list)
 
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
 
