@@ -6,3 +6,7 @@ dataset
 
 # Caches
 __pycache__
+
+# Generated visualization files
+*_visualization.obj
+*.html
