@@ -4,7 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-DexGraspNet is a grasp generation system that synthesizes dexterous hand grasps for 3D objects using optimization-based methods. The system uses the MANO hand model and performs physics-based grasp optimization through simulated annealing.
+DexGraspNet is a grasp generation system that synthesizes dexterous hand grasps for 3D objects using optimization-based methods. This repository uses the **Shadow Hand** robot model and performs physics-based grasp optimization through simulated annealing.
+
+**Key Difference from MANO branch**: This repository uses Shadow Hand (robotic hand with MJCF/URDF) instead of MANO (parametric human hand model).
 
 ## Quick Start Guide
 
@@ -37,23 +39,29 @@ conda install -c conda-forge libxcrypt -y
 pip uninstall pytorch3d -y  # Remove any existing installation
 pip install --no-build-isolation "git+https://github.com/facebookresearch/pytorch3d.git@stable"
 
-# Install manopth
-pip install git+https://github.com/hassony2/manopth.git
+# Install additional required packages
+pip install urdf_parser_py scipy networkx
+conda install rtree -y
 
-# Install TorchSDF
-cd /tmp
-git clone https://github.com/wrc042/TorchSDF.git
-cd TorchSDF
+# Install pytorch_kinematics (modified, included in repo)
+cd thirdparty/pytorch_kinematics
+pip install -e .
+cd ../..
+
+# Install TorchSDF (requires compatibility fixes for PyTorch 2.x)
+cd thirdparty/TorchSDF
+git checkout 0.1.0
 export IGNORE_TORCH_VER=1
 python setup.py develop
-cd -
-
-# Install additional required packages
-pip install "numpy<1.24"  # chumpy compatibility
-pip install chumpy opencv-python lxml rtree scipy
+cd ../..
 ```
 
 **CRITICAL**: pytorch3d MUST be installed with `--no-build-isolation` and built from source to enable GPU support. Pre-built wheels do not include CUDA kernels.
+
+**Important Notes**:
+- Python 3.8 is recommended (Python 3.7 only needed if using Isaac Gym validation)
+- PyTorch 2.1.0 + CUDA 12.1 is the recommended version
+- TorchSDF requires compatibility fixes for PyTorch 2.x (already applied in this repo)
 
 #### 2. Build External Tools (for asset_process)
 
@@ -120,7 +128,7 @@ cd grasp_generation/
 # Generate grasps for one object
 python main.py \
   --object_code_list "['banana']" \
-  --name test_banana \
+  --name test_shadowhand \
   --n_contact 4 \
   --batch_size 128 \
   --n_iter 6000 \
@@ -145,7 +153,7 @@ cd grasp_generation/tests/
 python visualize_result.py \
   --object_code banana \
   --num 0 \
-  --result_path ../data/experiments/test_banana/results
+  --result_path ../data/experiments/test_shadowhand/results
 
 # The HTML file will be saved in grasp_generation/ directory
 # Open grasp_visualization_banana_0.html in a web browser
@@ -153,109 +161,164 @@ python visualize_result.py \
 
 **Note**: `--num` is the grasp index (0 = best grasp, 1 = second best, etc.). Each visualization shows ONE grasp.
 
-## Repository Structure
-
-The codebase is organized into two main modules:
-
-### `asset_process/`
-Preprocessing pipeline for 3D object models. Converts raw meshes from various datasets into simulation-ready assets.
-
-**Pipeline stages** (must be run in order):
-1. **Extraction** - Organize models from source datasets
-2. **Manifold** - Convert to manifold meshes using ManifoldPlus (or trimesh as fallback)
-3. **Normalization** - Center, scale, and filter models
-4. **Decomposition** - Convex decomposition using CoACD, generates URDF files
-
-**Supported Input Formats**: STL, OBJ, OFF
-
-### `grasp_generation/`
-Core grasp synthesis system using optimization.
-
-**Key components**:
-- `main.py` - Entry point for grasp generation experiments
-- `utils/hand_model.py` - MANO hand model wrapper with contact point management
-- `utils/object_model.py` - Object mesh loading, SDF computation, surface sampling
-- `utils/energy.py` - Energy function with 5 terms: force closure (E_fc), contact distance (E_dis), penetration (E_pen), pose prior (E_prior), self-penetration (E_spen)
-- `utils/optimizer.py` - Simulated annealing optimizer with RMSProp and contact resampling
-- `utils/initializations.py` - Convex hull-based initialization
-- `utils/logger.py` - Training logging and result tracking
-- `tests/` - Visualization scripts for hand model, initialization, and results
-
 ## Common Issues & Solutions
 
-### Issue 1: ManifoldPlus Segmentation Faults
+### Issue 1: TorchSDF setup.py - IGNORE_TORCH_VER not defined
 
-**Problem**: ManifoldPlus crashes with segmentation faults on STL files.
-
-**Solution**: Use the provided `convert_with_trimesh.py` script instead:
-```bash
-python convert_with_trimesh.py --src ../data/raw_models --dst ../data/manifolds
+**Problem**: 
+```
+NameError: name 'IGNORE_TORCH_VER' is not defined
 ```
 
-This uses trimesh's built-in mesh repair functions as a more stable alternative.
+**Cause**: TorchSDF's setup.py uses `IGNORE_TORCH_VER` variable but doesn't read it from environment.
 
-### Issue 2: pytorch3d "Not compiled with GPU support"
-
-**Problem**: RuntimeError: Not compiled with GPU support.
-
-**Solution**: pytorch3d must be built from source with CUDA support:
-```bash
-pip uninstall pytorch3d -y
-pip install --no-build-isolation "git+https://github.com/facebookresearch/pytorch3d.git@stable"
-```
-
-Pre-built wheels do not include CUDA kernels.
-
-### Issue 3: chumpy NumPy compatibility
-
-**Problem**: ImportError: cannot import name 'bool' from 'numpy'
-
-**Solution**: Downgrade NumPy to <1.24:
-```bash
-pip install "numpy<1.24"
-```
-
-chumpy (required by manopth) is incompatible with NumPy 1.24+.
-
-### Issue 4: trimesh API changes
-
-**Problem**: AttributeError: 'Trimesh' object has no attribute 'remove_degenerate_faces'
-
-**Solution**: The code has been updated to use `nondegenerate_faces()` property instead. If you encounter this, the fix is in `utils/initializations.py`:
+**Solution**: Already fixed in this repository. The fix adds this line to `thirdparty/TorchSDF/setup.py` after line 16:
 ```python
-if hasattr(mesh_origin, 'nondegenerate_faces'):
-    mesh_origin.update_faces(mesh_origin.nondegenerate_faces())
+IGNORE_TORCH_VER = os.environ.get('IGNORE_TORCH_VER', '0') == '1'
 ```
 
-### Issue 5: Missing dependencies
+### Issue 2: TorchSDF compilation - CHECK_EQ undefined
 
-**Problem**: ModuleNotFoundError for various packages.
-
-**Solution**: Install all required packages:
-```bash
-pip install lxml chumpy opencv-python rtree scipy
+**Problem**:
+```
+error: identifier "CHECK_EQ" is undefined
 ```
 
-### Issue 6: __file__ is empty string
+**Cause**: PyTorch 2.x removed the `CHECK_EQ` macro that TorchSDF uses.
 
-**Problem**: FileNotFoundError: [Errno 2] No such file or directory: ''
+**Solution**: Already fixed in this repository. The fix modifies `thirdparty/TorchSDF/torchsdf/csrc/utils.h` line 22-27:
+```cpp
+// OLD (PyTorch 1.x):
+#define CUDA_CHECK(condition) \
+  do { \
+    cudaError_t error = condition; \
+    CHECK_EQ(error, cudaSuccess) << " " << cudaGetErrorString(error); \
+  } while (0)
 
-**Solution**: The code has been updated to handle empty `__file__`. If you encounter this, add checks:
+// NEW (PyTorch 2.x):
+#define CUDA_CHECK(condition) \
+  do { \
+    cudaError_t error = condition; \
+    TORCH_CHECK(error == cudaSuccess, "CUDA error: ", cudaGetErrorString(error)); \
+  } while (0)
+```
+
+### Issue 3: main.py - __file__ is empty string
+
+**Problem**:
+```
+FileNotFoundError: [Errno 2] No such file or directory: ''
+```
+
+**Cause**: `__file__` variable can be empty in some execution contexts.
+
+**Solution**: Already fixed in this repository. The fix modifies `grasp_generation/main.py` line 6-9:
 ```python
+# OLD:
+os.chdir(os.path.dirname(__file__))
+
+# NEW:
 if __file__ and os.path.dirname(__file__):
     os.chdir(os.path.dirname(__file__))
 ```
 
-### Issue 7: Visualization doesn't open
+### Issue 4: main.py - object_code_list parsing error
 
-**Problem**: Plotly visualization doesn't display on remote servers.
-
-**Solution**: The visualization scripts now save HTML files:
-```python
-fig.write_html('grasp_visualization.html')
+**Problem**:
+```
+ValueError: string is not a file: `../data/meshdata/[/coacd/decomposed.obj`
 ```
 
-Download and open the HTML file in your local browser.
+**Cause**: Command line argument `"['banana']"` is not parsed as Python list.
+
+**Solution**: Already fixed in this repository. Two changes:
+1. Remove `type=list` from argument definition (line 42)
+2. Add parsing after `parser.parse_args()` (line 72-75):
+```python
+# Fix object_code_list if it's a string from command line
+if isinstance(args.object_code_list, str):
+    import ast
+    args.object_code_list = ast.literal_eval(args.object_code_list)
+```
+
+### Issue 5: initializations.py - remove_degenerate_faces not found
+
+**Problem**:
+```
+AttributeError: 'Trimesh' object has no attribute 'remove_degenerate_faces'
+```
+
+**Cause**: Trimesh API changed - `remove_degenerate_faces()` method was replaced with `nondegenerate_faces()` property.
+
+**Solution**: Already fixed in this repository. The fix modifies `grasp_generation/utils/initializations.py` line 45-48:
+```python
+# OLD:
+mesh_origin.faces = mesh_origin.faces[mesh_origin.remove_degenerate_faces()]
+
+# NEW:
+if hasattr(mesh_origin, 'nondegenerate_faces'):
+    mesh_origin.update_faces(mesh_origin.nondegenerate_faces())
+```
+
+### Issue 6: visualize_result.py - utils module not found
+
+**Problem**:
+```
+ModuleNotFoundError: No module named 'utils'
+```
+
+**Cause**: Script runs from `tests/` directory but `utils` is in parent directory.
+
+**Solution**: Already fixed in this repository. The fix modifies `grasp_generation/tests/visualize_result.py` line 6-11:
+```python
+# Get the script's directory and parent directory (grasp_generation/)
+script_dir = os.path.dirname(os.path.abspath(__file__)) if __file__ else os.getcwd()
+parent_dir = os.path.dirname(script_dir)
+
+# Change to parent directory and add to path
+if os.path.exists(parent_dir):
+    os.chdir(parent_dir)
+    sys.path.insert(0, parent_dir)
+```
+
+
+## Repository Structure
+
+```
+DexGraspNet/
+├── asset_process/           # 3D object mesh preprocessing pipeline
+│   ├── extract.py          # Extract meshes from datasets
+│   ├── convert_with_trimesh.py  # Convert to manifold (trimesh fallback)
+│   ├── normalize.py        # Center, scale, filter meshes
+│   ├── decompose_list.py   # Convex decomposition with CoACD
+│   └── utils/              # Extraction utilities
+├── grasp_generation/        # Grasp synthesis system
+│   ├── main.py             # Entry point for experiments
+│   ├── mjcf/               # Shadow Hand MJCF files
+│   │   ├── shadow_hand_wrist_free.xml
+│   │   ├── contact_points.json
+│   │   └── penetration_points.json
+│   ├── utils/              # Core modules
+│   │   ├── hand_model.py   # Shadow Hand model (pytorch_kinematics)
+│   │   ├── object_model.py # Object mesh loading and SDF
+│   │   ├── energy.py       # Energy function (5 terms)
+│   │   ├── optimizer.py    # Simulated annealing
+│   │   ├── initializations.py  # Convex hull initialization
+│   │   └── logger.py       # Training logging
+│   └── tests/
+│       └── visualize_result.py  # Grasp visualization
+├── data/                    # Symlinked data directories (not in repo)
+│   ├── raw_models/         # Input STL/OBJ files
+│   ├── manifolds/          # Watertight meshes
+│   ├── normalized_models/  # Normalized meshes
+│   ├── meshdata/           # Processed objects with URDF
+│   └── experiments/        # Experimental results
+└── thirdparty/
+    ├── pytorch_kinematics/  # Modified for speed (included)
+    ├── TorchSDF/           # Custom Kaolin fork (clone separately)
+    ├── CoACD/              # Convex decomposition (build separately)
+    └── ManifoldPlus/       # Manifold conversion (build separately)
+```
 
 ## Architecture Details
 
@@ -263,28 +326,34 @@ Download and open the HTML file in your local browser.
 
 The core optimization uses simulated annealing with the following flow:
 
-1. **Try step** - Optimizer proposes new hand pose using RMSProp gradient descent and randomly resamples contact points
-2. **Compute energy** - Calculate 5 energy terms for new configuration
-3. **Accept/reject** - Use Metropolis criterion with temperature schedule
-4. **Log** - Track energy components throughout optimization
+1. **Initialization** - Sample initial hand poses using convex hull method
+2. **Try step** - Optimizer proposes new hand pose using RMSProp gradient descent and randomly resamples contact points
+3. **Compute energy** - Calculate 5 energy terms for new configuration
+4. **Accept/reject** - Use Metropolis criterion with temperature schedule
+5. **Log** - Track energy components throughout optimization
 
 ### Energy Function (utils/energy.py)
 
-Total energy = E_fc + w_dis×E_dis + w_pen×E_pen + w_prior×E_prior + w_spen×E_spen
+Total energy = E_fc + w_dis×E_dis + w_pen×E_pen + w_joints×E_joints + w_spen×E_spen
 
 - **E_fc**: Force closure quality (wrench space analysis)
 - **E_dis**: Contact point distance to object surface
 - **E_pen**: Object-to-hand penetration (sampled surface points)
-- **E_prior**: Hand pose prior (Gaussian distribution from MANO)
+- **E_joints**: Joint limit violations
 - **E_spen**: Hand self-penetration
 
 ### Hand Model (utils/hand_model.py)
 
-Wraps MANO hand model with:
-- 51-dimensional pose: [translation(3), rotation(3), joint_angles(45)]
+Wraps Shadow Hand MJCF model with:
+- Forward kinematics via `pytorch_kinematics`
 - Contact point management via pre-selected candidate indices
 - SDF computation using KNN + vertex normals
-- Requires `manopth` library and MANO_RIGHT.pkl
+- 24 DOF dexterous hand
+
+**Key files**:
+- `mjcf/shadow_hand_wrist_free.xml` - MJCF robot definition
+- `mjcf/contact_points.json` - Hand-selected contact candidates
+- `mjcf/penetration_points.json` - Keypoints for self-penetration check
 
 ### Object Model (utils/object_model.py)
 
@@ -301,6 +370,7 @@ Custom simulated annealing implementation:
 - Random resampling for discrete parameters (contact indices)
 - Temperature-based acceptance with exponential decay
 - Step size decay synchronized with temperature
+
 
 ## Data Paths
 
@@ -322,21 +392,9 @@ DexGraspNet/
 │           ├── logs/
 │           ├── results/
 │           └── output.txt
-├── asset_process/
-│   ├── ManifoldPlus/
-│   ├── CoACD/
-│   └── convert_with_trimesh.py  # Fallback for ManifoldPlus
-└── grasp_generation/
-    ├── main.py
-    ├── utils/
-    ├── tests/
-    └── mano/
-        ��── MANO_RIGHT.pkl
-        ├── contact_indices.json
-        └── pose_distrib.pt
 ```
 
-Note: `meshdata`, `experiments`, `graspdata`, and `dataset` are typically symlinks (see .gitignore).
+Note: `meshdata`, `experiments` are typically symlinks (see .gitignore).
 
 ## Command Reference
 
@@ -361,7 +419,7 @@ python main.py \
 - `--gpu`: GPU device ID
 
 **Hyperparameters** (marked as "Magic, don't touch!" in code):
-- `--w_dis`, `--w_pen`, `--w_prior`, `--w_spen`: Energy term weights
+- `--w_dis`, `--w_pen`, `--w_joints`, `--w_spen`: Energy term weights
 - `--starting_temperature`, `--temperature_decay`, `--annealing_period`: Annealing schedule
 - `--step_size`, `--stepsize_period`, `--mu`: RMSProp parameters
 - `--switch_possibility`: Contact point resampling probability
@@ -377,46 +435,28 @@ python visualize_result.py \
 
 **Note**: `--num` is the grasp INDEX (0-127 for batch_size=128), not the number of grasps to display. Lower index = better grasp quality.
 
-## Development Notes
-
-### Working with Energy Terms
-
-When modifying energy functions, all terms must:
-- Return tensors of shape (batch_size,)
-- Be differentiable for gradient-based optimization
-- Use consistent device placement (CPU/CUDA)
-
-### Batch Processing
-
-The system processes multiple objects simultaneously:
-- `total_batch_size = len(object_code_list) × batch_size`
-- Each object gets `batch_size` grasp attempts
-- Results are indexed as: `idx = object_index × batch_size + sample_index`
-
-### Contact Point System
-
-Contact points are selected from pre-defined candidates (contact_indices.json):
-- Indices reference vertices on the MANO hand mesh
-- Optimizer randomly resamples indices during optimization
-- Final contact points are stored per-grasp in results
-
-### Result Format
+## Result Format
 
 Results saved as .npy files containing list of dicts:
 ```python
 {
     'scale': float,
-    'qpos': {'trans': [3], 'rot': [3], 'thetas': [45]},
+    'qpos': {'trans': [3], 'rot': [3], 'thetas': [n_dofs]},
     'contact_point_indices': [n_contact],
     'qpos_st': {...},  # Initial pose
     'energy': float,
     'E_fc': float,
     'E_dis': float,
     'E_pen': float,
-    'E_prior': float,
+    'E_joints': float,
     'E_spen': float
 }
 ```
+
+**qpos structure**:
+- `WRJTx, WRJTy, WRJTz`: Translation (meters)
+- `WRJRx, WRJRy, WRJRz`: Rotation (euler angles, xyz convention)
+- `robot0:FFJ3`, `robot0:FFJ2`, ... : Joint angles for Shadow Hand
 
 ## Performance Notes
 
@@ -432,7 +472,6 @@ Quick test to verify everything works:
 ```bash
 # 1. Process a simple model
 cd asset_process/
-echo "Testing asset processing..."
 python convert_with_trimesh.py --src ../data/raw_models --dst ../data/manifolds
 python normalize.py --src ../data/manifolds --dst ../data/normalized_models
 python decompose_list.py --src ../data/normalized_models --dst ../data/meshdata --coacd_path ./CoACD/build/main
@@ -440,15 +479,42 @@ bash run.sh
 
 # 2. Generate grasps
 cd ../grasp_generation/
-echo "Testing grasp generation..."
 python main.py --object_code_list "['banana']" --name test --n_contact 4 --batch_size 32 --n_iter 1000 --gpu "0"
 
 # 3. Visualize
 cd tests/
-echo "Testing visualization..."
 python visualize_result.py --object_code banana --num 0 --result_path ../data/experiments/test/results
 
 echo "Installation test complete! Check grasp_visualization_banana_0.html"
 ```
 
 If all steps complete without errors, your installation is successful!
+
+## Development Notes
+
+### Batch Processing
+
+The system processes multiple objects simultaneously:
+- `total_batch_size = len(object_code_list) × batch_size`
+- Each object gets `batch_size` grasp attempts
+- Results are indexed as: `idx = object_index × batch_size + sample_index`
+
+### Contact Point System
+
+Contact points are selected from pre-defined candidates (contact_points.json):
+- Indices reference vertices on the Shadow Hand mesh
+- Optimizer randomly resamples indices during optimization
+- Final contact points are stored per-grasp in results
+
+### Differences from MANO Branch
+
+**Hand Model**:
+- MANO: Parametric human hand (45 DOF, manopth)
+- Shadow Hand: Robotic hand (22 DOF, pytorch_kinematics + MJCF)
+
+**Dependencies**:
+- MANO: manopth, chumpy, numpy<1.24
+- Shadow Hand: pytorch_kinematics, urdf_parser_py
+
+**Key Insight**: Both branches can use Python 3.8 + PyTorch 2.1.0 without needing Isaac Gym for grasp generation.
+

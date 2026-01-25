@@ -9,7 +9,6 @@ import transforms3d
 import math
 import pytorch3d.structures
 import pytorch3d.ops
-import pytorch3d.transforms
 import trimesh as tm
 import numpy as np
 import torch.nn.functional
@@ -17,7 +16,7 @@ import torch.nn.functional
 
 def initialize_convex_hull(hand_model, object_model, args):
     """
-    Initialize grasp translation, rotation, thetas, and contact point indices
+    Initialize grasp translation, rotation, joint angles, and contact point indices
     
     Parameters
     ----------
@@ -45,11 +44,8 @@ def initialize_convex_hull(hand_model, object_model, args):
         faces = mesh_origin.faces
         vertices *= object_model.object_scale_tensor[i].max().item()
         mesh_origin = tm.Trimesh(vertices, faces)
-        # Remove degenerate faces (API changed in newer trimesh versions)
         if hasattr(mesh_origin, 'nondegenerate_faces'):
             mesh_origin.update_faces(mesh_origin.nondegenerate_faces())
-        elif hasattr(mesh_origin, 'remove_degenerate_faces'):
-            mesh_origin.remove_degenerate_faces()
         vertices += 0.2 * vertices / np.linalg.norm(vertices, axis=1, keepdims=True)
         mesh = tm.Trimesh(vertices=vertices, faces=faces).convex_hull
         vertices = torch.tensor(mesh.vertices, dtype=torch.float, device=device)
@@ -82,47 +78,23 @@ def initialize_convex_hull(hand_model, object_model, args):
             rotation_local[j] = torch.tensor(transforms3d.euler.euler2mat(process_theta[j], deviate_theta[j], rotate_theta[j], axes='rzxz'), dtype=torch.float, device=device)
             rotation_global[j] = torch.tensor(transforms3d.euler.euler2mat(math.atan2(n[j, 1], n[j, 0]) - math.pi / 2, -math.acos(n[j, 2]), 0, axes='rzxz'), dtype=torch.float, device=device)
         translation[i * batch_size_each: (i + 1) * batch_size_each] = p - distance.unsqueeze(1) * (rotation_global @ rotation_local @ torch.tensor([0, 0, 1], dtype=torch.float, device=device).reshape(1, -1, 1)).squeeze(2)
-        rotation[i * batch_size_each: (i + 1) * batch_size_each] = rotation_global @ rotation_local
-        
-    translation_hand = torch.tensor([-0.1, -0.05, 0], dtype=torch.float, device=device)
-    rotation_hand = torch.tensor(transforms3d.euler.euler2mat(-np.pi / 2, -np.pi / 2, np.pi / 6, axes='rzxz'), dtype=torch.float, device=device)
+        rotation_hand = torch.tensor(transforms3d.euler.euler2mat(0, -np.pi / 3, 0, axes='rzxz'), dtype=torch.float, device=device)
+        rotation[i * batch_size_each: (i + 1) * batch_size_each] = rotation_global @ rotation_local @ rotation_hand
     
-    translation = translation + rotation @ translation_hand
-    rotation = rotation @ rotation_hand
+    # initialize joint angles
+    # joint_angles_mu: hand-crafted canonicalized hand articulation
+    # use truncated normal distribution to jitter the joint angles
 
-    # initialize thetas
-    # thetas_mu: hand-crafted canonicalized hand articulation
-    # use normal distribution to jitter the thetas
+    joint_angles_mu = torch.tensor([0.1, 0, 0.6, 0, 0, 0, 0.6, 0, -0.1, 0, 0.6, 0, 0, -0.2, 0, 0.6, 0, 0, 1.2, 0, -0.2, 0], dtype=torch.float, device=device)
+    joint_angles_sigma = args.jitter_strength * (hand_model.joints_upper - hand_model.joints_lower)
+    joint_angles = torch.zeros([total_batch_size, hand_model.n_dofs], dtype=torch.float, device=device)
+    for i in range(hand_model.n_dofs):
+        torch.nn.init.trunc_normal_(joint_angles[:, i], joint_angles_mu[i], joint_angles_sigma[i], hand_model.joints_lower[i] - 1e-6, hand_model.joints_upper[i] + 1e-6)
 
-    thetas_mu = torch.tensor([
-            0, 0, torch.pi / 6, 
-            0, 0, 0, 
-            0, 0, 0, 
-            
-            0, 0, torch.pi / 6, 
-            0, 0, 0, 
-            0, 0, 0, 
-            
-            0, 0, torch.pi / 6, 
-            0, 0, 0, 
-            0, 0, 0, 
-            
-            0, 0, torch.pi / 6, 
-            0, 0, 0, 
-            0, 0, 0, 
-            
-            *(torch.pi / 2 * torch.tensor([2, 1, 0], dtype=torch.float) / torch.tensor([2, 1, 0], dtype=torch.float).norm()), 
-            0, 0, 0, 
-            0, 0, 0, 
-        ], dtype=torch.float, device=device).unsqueeze(0).repeat(total_batch_size, 1)
-    thetas_sigma = args.jitter_strength * torch.ones([total_batch_size, 45], dtype=torch.float, device=device)
-    thetas = torch.normal(thetas_mu, thetas_sigma)
-
-    rotation = pytorch3d.transforms.quaternion_to_axis_angle(pytorch3d.transforms.matrix_to_quaternion(rotation))
     hand_pose = torch.cat([
-        translation, 
-        rotation, 
-        thetas, 
+        translation,
+        rotation.transpose(1, 2)[:, :2].reshape(-1, 6),
+        joint_angles
     ], dim=1)
     hand_pose.requires_grad_()
 

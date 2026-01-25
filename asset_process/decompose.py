@@ -1,9 +1,7 @@
 import os
 import shutil
-from distutils.spawn import find_executable
 import numpy as np
 from trimesh.version import __version__ as trimesh_version
-from trimesh.exchange.obj import load_obj
 import trimesh as tm
 import argparse
 

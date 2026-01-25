@@ -7,7 +7,7 @@ Description: energy functions
 import torch
 
 
-def cal_energy(hand_model, object_model, w_dis=100.0, w_pen=100.0, w_prior=0.5, w_spen=10.0, verbose=False):
+def cal_energy(hand_model, object_model, w_dis=100.0, w_pen=100.0, w_spen=10.0, w_joints=1.0, verbose=False):
     
     # E_dis
     batch_size, n_contact, _ = hand_model.contact_points.shape
@@ -27,6 +27,10 @@ def cal_energy(hand_model, object_model, w_dis=100.0, w_pen=100.0, w_prior=0.5, 
     norm = torch.norm(contact_normal @ g, dim=[1, 2])
     E_fc = norm * norm
 
+    # E_joints
+    E_joints = torch.sum((hand_model.hand_pose[:, 9:] > hand_model.joints_upper) * (hand_model.hand_pose[:, 9:] - hand_model.joints_upper), dim=-1) + \
+        torch.sum((hand_model.hand_pose[:, 9:] < hand_model.joints_lower) * (hand_model.joints_lower - hand_model.hand_pose[:, 9:]), dim=-1)
+
     # E_pen
     object_scale = object_model.object_scale_tensor.flatten().unsqueeze(1).unsqueeze(2)
     object_surface_points = object_model.surface_points_tensor * object_scale  # (n_objects * batch_size_each, num_samples, 3)
@@ -34,13 +38,10 @@ def cal_energy(hand_model, object_model, w_dis=100.0, w_pen=100.0, w_prior=0.5, 
     distances[distances <= 0] = 0
     E_pen = distances.sum(-1)
 
-    # E_prior
-    E_prior = torch.norm((hand_model.hand_pose[:, 6:] - hand_model.pose_distrib[0]) / hand_model.pose_distrib[1], dim=-1)
-    
     # E_spen
     E_spen = hand_model.self_penetration()
 
     if verbose:
-        return E_fc + w_dis * E_dis + w_pen * E_pen + w_prior * E_prior + w_spen * E_spen, E_fc, E_dis, E_pen, E_prior, E_spen
+        return E_fc + w_dis * E_dis + w_pen * E_pen + w_spen * E_spen + w_joints * E_joints, E_fc, E_dis, E_pen, E_spen, E_joints
     else:
-        return E_fc + w_dis * E_dis + w_pen * E_pen + w_prior * E_prior + w_spen * E_spen
+        return E_fc + w_dis * E_dis + w_pen * E_pen + w_spen * E_spen + w_joints * E_joints

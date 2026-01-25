@@ -52,7 +52,7 @@ class Annealing:
         self.old_current_status = None
         self.old_contact_points = None
         self.old_grad_hand_pose = None
-        self.ema_grad_hand_pose = torch.zeros(51, dtype=torch.float, device=device)
+        self.ema_grad_hand_pose = torch.zeros(self.hand_model.n_dofs + 9, dtype=torch.float, device=device)
 
     def try_step(self):
         """
@@ -79,7 +79,9 @@ class Annealing:
 
         self.old_hand_pose = self.hand_model.hand_pose
         self.old_contact_point_indices = self.hand_model.contact_point_indices
-        self.old_vertices = self.hand_model.vertices
+        self.old_global_transformation = self.hand_model.global_translation
+        self.old_global_rotation = self.hand_model.global_rotation
+        self.old_current_status = self.hand_model.current_status
         self.old_contact_points = self.hand_model.contact_points
         self.old_grad_hand_pose = self.hand_model.hand_pose.grad
         self.hand_model.set_parameters(hand_pose, contact_point_indices)
@@ -109,7 +111,9 @@ class Annealing:
             reject = ~accept
             self.hand_model.hand_pose[reject] = self.old_hand_pose[reject]
             self.hand_model.contact_point_indices[reject] = self.old_contact_point_indices[reject]
-            self.hand_model.vertices[reject] = self.old_vertices[reject]
+            self.hand_model.global_translation[reject] = self.old_global_transformation[reject]
+            self.hand_model.global_rotation[reject] = self.old_global_rotation[reject]
+            self.hand_model.current_status = self.hand_model.chain.forward_kinematics(self.hand_model.hand_pose[:, 9:])
             self.hand_model.contact_points[reject] = self.old_contact_points[reject]
             self.hand_model.hand_pose.grad[reject] = self.old_grad_hand_pose[reject]
 
