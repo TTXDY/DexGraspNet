@@ -75,7 +75,24 @@ class Annealing:
         batch_size, n_contact = self.hand_model.contact_point_indices.shape
         switch_mask = torch.rand(batch_size, n_contact, dtype=torch.float, device=self.device) < self.switch_possibility
         contact_point_indices = self.hand_model.contact_point_indices.clone()
-        contact_point_indices[switch_mask] = torch.randint(self.hand_model.n_contact_candidates, size=[switch_mask.sum()], device=self.device)
+        allowed = getattr(self.hand_model, "allowed_contact_indices_per_slot", None)
+        if allowed is None:
+            contact_point_indices[switch_mask] = torch.randint(
+                self.hand_model.n_contact_candidates,
+                size=[switch_mask.sum()],
+                device=self.device,
+            )
+        else:
+            if len(allowed) != n_contact:
+                raise ValueError("allowed_contact_indices_per_slot length must match n_contact")
+            # Resample each contact slot only within its allowed link candidates.
+            for j in range(n_contact):
+                mask = switch_mask[:, j]
+                if not mask.any():
+                    continue
+                candidates = allowed[j]
+                rand_idx = torch.randint(0, candidates.numel(), (mask.sum(),), device=self.device)
+                contact_point_indices[mask, j] = candidates[rand_idx]
 
         self.old_hand_pose = self.hand_model.hand_pose
         self.old_contact_point_indices = self.hand_model.contact_point_indices

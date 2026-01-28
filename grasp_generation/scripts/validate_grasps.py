@@ -15,6 +15,7 @@ import torch
 import numpy as np
 import transforms3d
 from utils.hand_model import HandModel
+from utils.hand_model_dexhand021 import HandModelDexHand021, get_dexhand021_output_alignment
 from utils.object_model import ObjectModel
 
 if __name__ == '__main__':
@@ -24,6 +25,7 @@ if __name__ == '__main__':
     parser.add_argument('--mesh_path', default="../data/meshdata", type=str)
     parser.add_argument('--grasp_path', default="../data/graspdata", type=str)
     parser.add_argument('--result_path', default="../data/dataset", type=str)
+    parser.add_argument('--hand_model_type', default='shadow_hand', type=str, choices=['shadow_hand', 'dexhand021'])
     parser.add_argument('--object_code',
                         default="sem-Xbox360-d0dff348985d4f8e65ca1b579a4b8d2",
                         type=str)
@@ -39,13 +41,22 @@ if __name__ == '__main__':
 
     translation_names = ['WRJTx', 'WRJTy', 'WRJTz']
     rot_names = ['WRJRx', 'WRJRy', 'WRJRz']
-    joint_names = [
-        'robot0:FFJ3', 'robot0:FFJ2', 'robot0:FFJ1', 'robot0:FFJ0',
-        'robot0:MFJ3', 'robot0:MFJ2', 'robot0:MFJ1', 'robot0:MFJ0',
-        'robot0:RFJ3', 'robot0:RFJ2', 'robot0:RFJ1', 'robot0:RFJ0',
-        'robot0:LFJ4', 'robot0:LFJ3', 'robot0:LFJ2', 'robot0:LFJ1', 'robot0:LFJ0',
-        'robot0:THJ4', 'robot0:THJ3', 'robot0:THJ2', 'robot0:THJ1', 'robot0:THJ0'
-    ]
+    if args.hand_model_type == 'dexhand021':
+        joint_names = [
+            'r_f_joint1_1', 'r_f_joint1_2', 'r_f_joint1_3', 'r_f_joint1_4',
+            'r_f_joint2_1', 'r_f_joint2_2', 'r_f_joint2_3', 'r_f_joint2_4',
+            'r_f_joint3_1', 'r_f_joint3_2', 'r_f_joint3_3', 'r_f_joint3_4',
+            'r_f_joint4_1', 'r_f_joint4_2', 'r_f_joint4_3', 'r_f_joint4_4',
+            'r_f_joint5_1', 'r_f_joint5_2', 'r_f_joint5_3', 'r_f_joint5_4'
+        ]
+    else:
+        joint_names = [
+            'robot0:FFJ3', 'robot0:FFJ2', 'robot0:FFJ1', 'robot0:FFJ0',
+            'robot0:MFJ3', 'robot0:MFJ2', 'robot0:MFJ1', 'robot0:MFJ0',
+            'robot0:RFJ3', 'robot0:RFJ2', 'robot0:RFJ1', 'robot0:RFJ0',
+            'robot0:LFJ4', 'robot0:LFJ3', 'robot0:LFJ2', 'robot0:LFJ1', 'robot0:LFJ0',
+            'robot0:THJ4', 'robot0:THJ3', 'robot0:THJ2', 'robot0:THJ1', 'robot0:THJ0'
+        ]
 
     os.environ.pop("CUDA_VISIBLE_DEVICES")
     os.makedirs(args.result_path, exist_ok=True)
@@ -63,22 +74,39 @@ if __name__ == '__main__':
             scale = data_dict[i]['scale']
             rot = np.array(transforms3d.euler.euler2mat(
                 *[qpos[name] for name in rot_names]))
+            translation = torch.tensor([qpos[name] for name in translation_names], dtype=torch.float, device=device)
+            rot = torch.tensor(rot, dtype=torch.float, device=device)
+            if args.hand_model_type == 'dexhand021':
+                align = get_dexhand021_output_alignment(device=device)
+                align_inv = align.transpose(0, 1)
+                rot = align_inv @ rot
+                translation = (align_inv @ translation.unsqueeze(1)).squeeze(1)
             rot = rot[:, :2].T.ravel().tolist()
-            hand_pose = torch.tensor([qpos[name] for name in translation_names] + rot + [
+            hand_pose = torch.tensor(translation.tolist() + rot + [
                 qpos[name] for name in joint_names], dtype=torch.float, device=device)
             hand_state.append(hand_pose)
             scale_tensor.append(scale)
         hand_state = torch.stack(hand_state).to(device).requires_grad_()
         scale_tensor = torch.tensor(scale_tensor).reshape(1, -1).to(device)
         # print(scale_tensor.dtype)
-        hand_model = HandModel(
-            mjcf_path='mjcf/shadow_hand_wrist_free.xml',
-            mesh_path='mjcf/meshes',
-            contact_points_path='mjcf/contact_points.json',
-            penetration_points_path='mjcf/penetration_points.json',
-            n_surface_points=2000,
-            device=device
-        )
+        if args.hand_model_type == 'dexhand021':
+            hand_model = HandModelDexHand021(
+                mjcf_path='mjcf_dexhand021/dexhand021_right_simplified_floating_cleaned.xml',
+                mesh_path='mjcf_dexhand021/meshes',
+                contact_points_path='mjcf_dexhand021/contact_points.json',
+                penetration_points_path='mjcf_dexhand021/penetration_points.json',
+                n_surface_points=2000,
+                device=device
+            )
+        else:
+            hand_model = HandModel(
+                mjcf_path='mjcf/shadow_hand_wrist_free.xml',
+                mesh_path='mjcf/meshes',
+                contact_points_path='mjcf/contact_points.json',
+                penetration_points_path='mjcf/penetration_points.json',
+                n_surface_points=2000,
+                device=device
+            )
         hand_model.set_parameters(hand_state)
         # object model
         object_model = ObjectModel(
@@ -125,6 +153,8 @@ if __name__ == '__main__':
             hand_state[:, 9:] += hand_state.grad[:, 9:] * args.grad_move
             hand_state.grad.zero_()
 
+    if args.hand_model_type == 'dexhand021':
+        raise ValueError('Isaac validation only supports shadow_hand; dexhand021 is not supported.')
     sim = IsaacValidator(gpu=args.gpu)
     if (args.index is not None):
         sim = IsaacValidator(gpu=args.gpu, mode="gui")

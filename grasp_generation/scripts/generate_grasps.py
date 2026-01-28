@@ -19,6 +19,7 @@ import random
 import transforms3d
 
 from utils.hand_model import HandModel
+from utils.hand_model_dexhand021 import HandModelDexHand021, get_dexhand021_output_alignment
 from utils.object_model import ObjectModel
 from utils.initializations import initialize_convex_hull
 from utils.energy import cal_energy
@@ -36,6 +37,36 @@ except RuntimeError:
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
 np.seterr(all='raise')
 
+def _parse_contact_links(text):
+    if text is None:
+        return None
+    s = text.strip()
+    if s.startswith('[') and s.endswith(']'):
+        s = s[1:-1]
+    s = s.replace('"', '').replace("'", '')
+    tokens = [t.strip() for t in s.split(',') if t.strip()]
+    return tokens or None
+
+
+def _map_contact_token(token, hand_model_type):
+    import re
+    m = re.match(r'^(thumb|index|middle|ring|pinky)(\d+)$', token)
+    if not m:
+        raise ValueError(f"Invalid contact token '{token}'. Use like index4, thumb4.")
+    finger = m.group(1)
+    link_num = int(m.group(2))
+    if hand_model_type == 'dexhand021':
+        if link_num < 1 or link_num > 3:
+            raise ValueError(f"dexhand021 link number must be 1-3 (joint1 excluded), got {link_num} in '{token}'.")
+        finger_map = {'thumb': 1, 'index': 2, 'middle': 3, 'ring': 4, 'pinky': 5}
+        return f"r_f_link{finger_map[finger]}_{link_num + 1}_child"
+    else:
+        if link_num < 1 or link_num > 3:
+            raise ValueError(f"shadow_hand link number must be 1-3, got {link_num} in '{token}'.")
+        finger_map = {'index': 'ff', 'middle': 'mf', 'ring': 'rf', 'pinky': 'lf', 'thumb': 'th'}
+        seg_map = {1: 'proximal_child', 2: 'middle_child', 3: 'distal_child'}
+        return f"robot0:{finger_map[finger]}{seg_map[link_num]}"
+
 
 def generate(args_list):
     args, object_code_list, id, gpu_list = args_list
@@ -51,13 +82,22 @@ def generate(args_list):
     os.environ['CUDA_VISIBLE_DEVICES'] = gpu_list[worker - 1]
     device = torch.device('cuda')
 
-    hand_model = HandModel(
-        mjcf_path='mjcf/shadow_hand_wrist_free.xml',
-        mesh_path='mjcf/meshes',
-        contact_points_path='mjcf/contact_points.json',
-        penetration_points_path='mjcf/penetration_points.json',
-        device=device
-    )
+    if args.hand_model_type == 'dexhand021':
+        hand_model = HandModelDexHand021(
+            mjcf_path='mjcf_dexhand021/dexhand021_right_simplified_floating_cleaned.xml',
+            mesh_path='mjcf_dexhand021/meshes',
+            contact_points_path='mjcf_dexhand021/contact_points.json',
+            penetration_points_path='mjcf_dexhand021/penetration_points.json',
+            device=device
+        )
+    else:
+        hand_model = HandModel(
+            mjcf_path='mjcf/shadow_hand_wrist_free.xml',
+            mesh_path='mjcf/meshes',
+            contact_points_path='mjcf/contact_points.json',
+            penetration_points_path='mjcf/penetration_points.json',
+            device=device
+        )
 
     object_model = ObjectModel(
         data_root_path=args.data_root_path,
@@ -68,6 +108,27 @@ def generate(args_list):
     object_model.initialize(object_code_list)
 
     initialize_convex_hull(hand_model, object_model, args)
+
+    contact_tokens = _parse_contact_links(args.contact_links)
+    if contact_tokens is not None:
+        link_indices = []
+        total_batch_size = len(object_code_list) * args.batch_size_each
+        for token in contact_tokens:
+            link_name = _map_contact_token(token, args.hand_model_type)
+            if link_name not in hand_model.link_name_to_link_index:
+                raise ValueError(f"Link '{link_name}' not found in hand model.")
+            link_idx = hand_model.link_name_to_link_index[link_name]
+            candidate_indices = (hand_model.global_index_to_link_index == link_idx).nonzero(as_tuple=False).squeeze(1)
+            if candidate_indices.numel() == 0:
+                raise ValueError(f"No contact candidates found for link '{link_name}'.")
+            link_indices.append(candidate_indices)
+        idx_per_token = []
+        for candidate_indices in link_indices:
+            rand_idx = torch.randint(0, candidate_indices.numel(), (total_batch_size,), device=device)
+            idx_per_token.append(candidate_indices[rand_idx])
+        contact_point_indices = torch.stack(idx_per_token, dim=1)
+        hand_model.set_parameters(hand_model.hand_pose, contact_point_indices)
+        hand_model.allowed_contact_indices_per_slot = link_indices
     
     hand_pose_st = hand_model.hand_pose.detach()
 
@@ -117,13 +178,22 @@ def generate(args_list):
     # save results
     translation_names = ['WRJTx', 'WRJTy', 'WRJTz']
     rot_names = ['WRJRx', 'WRJRy', 'WRJRz']
-    joint_names = [
-        'robot0:FFJ3', 'robot0:FFJ2', 'robot0:FFJ1', 'robot0:FFJ0',
-        'robot0:MFJ3', 'robot0:MFJ2', 'robot0:MFJ1', 'robot0:MFJ0',
-        'robot0:RFJ3', 'robot0:RFJ2', 'robot0:RFJ1', 'robot0:RFJ0',
-        'robot0:LFJ4', 'robot0:LFJ3', 'robot0:LFJ2', 'robot0:LFJ1', 'robot0:LFJ0',
-        'robot0:THJ4', 'robot0:THJ3', 'robot0:THJ2', 'robot0:THJ1', 'robot0:THJ0'
-    ]
+    if args.hand_model_type == 'dexhand021':
+        joint_names = [
+            'r_f_joint1_1', 'r_f_joint1_2', 'r_f_joint1_3', 'r_f_joint1_4',
+            'r_f_joint2_1', 'r_f_joint2_2', 'r_f_joint2_3', 'r_f_joint2_4',
+            'r_f_joint3_1', 'r_f_joint3_2', 'r_f_joint3_3', 'r_f_joint3_4',
+            'r_f_joint4_1', 'r_f_joint4_2', 'r_f_joint4_3', 'r_f_joint4_4',
+            'r_f_joint5_1', 'r_f_joint5_2', 'r_f_joint5_3', 'r_f_joint5_4'
+        ]
+    else:
+        joint_names = [
+            'robot0:FFJ3', 'robot0:FFJ2', 'robot0:FFJ1', 'robot0:FFJ0',
+            'robot0:MFJ3', 'robot0:MFJ2', 'robot0:MFJ1', 'robot0:MFJ0',
+            'robot0:RFJ3', 'robot0:RFJ2', 'robot0:RFJ1', 'robot0:RFJ0',
+            'robot0:LFJ4', 'robot0:LFJ3', 'robot0:LFJ2', 'robot0:LFJ1', 'robot0:LFJ0',
+            'robot0:THJ4', 'robot0:THJ3', 'robot0:THJ2', 'robot0:THJ1', 'robot0:THJ0'
+        ]
     for i, object_code in enumerate(object_code_list):
         data_list = []
         for j in range(args.batch_size_each):
@@ -132,15 +202,27 @@ def generate(args_list):
             hand_pose = hand_model.hand_pose[idx].detach().cpu()
             qpos = dict(zip(joint_names, hand_pose[9:].tolist()))
             rot = robust_compute_rotation_matrix_from_ortho6d(hand_pose[3:9].unsqueeze(0))[0]
+            if args.hand_model_type == 'dexhand021':
+                align = get_dexhand021_output_alignment(device=hand_pose.device)
+                rot = align @ rot
+                translation = align @ hand_pose[:3]
+            else:
+                translation = hand_pose[:3]
             euler = transforms3d.euler.mat2euler(rot, axes='sxyz')
             qpos.update(dict(zip(rot_names, euler)))
-            qpos.update(dict(zip(translation_names, hand_pose[:3].tolist())))
+            qpos.update(dict(zip(translation_names, translation.tolist())))
             hand_pose = hand_pose_st[idx].detach().cpu()
             qpos_st = dict(zip(joint_names, hand_pose[9:].tolist()))
             rot = robust_compute_rotation_matrix_from_ortho6d(hand_pose[3:9].unsqueeze(0))[0]
+            if args.hand_model_type == 'dexhand021':
+                align = get_dexhand021_output_alignment(device=hand_pose.device)
+                rot = align @ rot
+                translation = align @ hand_pose[:3]
+            else:
+                translation = hand_pose[:3]
             euler = transforms3d.euler.mat2euler(rot, axes='sxyz')
             qpos_st.update(dict(zip(rot_names, euler)))
-            qpos_st.update(dict(zip(translation_names, hand_pose[:3].tolist())))
+            qpos_st.update(dict(zip(translation_names, translation.tolist())))
             data_list.append(dict(
                 scale=scale,
                 qpos=qpos,
@@ -160,6 +242,7 @@ if __name__ == '__main__':
     # experiment settings
     parser.add_argument('--result_path', default="../data/graspdata", type=str)
     parser.add_argument('--data_root_path', default="../data/meshdata", type=str)
+    parser.add_argument('--hand_model_type', default='shadow_hand', type=str, choices=['shadow_hand', 'dexhand021'])
     parser.add_argument('--object_code_list', nargs='*', type=str)
     parser.add_argument('--all', action='store_true')
     parser.add_argument('--overwrite', action='store_true')
@@ -169,6 +252,8 @@ if __name__ == '__main__':
     parser.add_argument('--batch_size_each', default=500, type=int)
     parser.add_argument('--max_total_batch_size', default=1000, type=int)
     parser.add_argument('--n_iter', default=6000, type=int)
+    parser.add_argument('--contact_links', default=None, type=str,
+                        help='Override contact selection with link tokens, e.g. "[index3,middle3,thumb3]"')
     # hyper parameters
     parser.add_argument('--switch_possibility', default=0.5, type=float)
     parser.add_argument('--mu', default=0.98, type=float)
@@ -202,6 +287,10 @@ if __name__ == '__main__':
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
     random.seed(args.seed)
+
+    contact_tokens = _parse_contact_links(args.contact_links)
+    if contact_tokens is not None:
+        args.n_contact = len(contact_tokens)
 
     if not os.path.exists(args.result_path):
         os.makedirs(args.result_path)

@@ -13,6 +13,7 @@ if __name__ == "__main__":
     parser.add_argument('--mesh_path', default="../data/meshdata", type=str)
     parser.add_argument('--src', default="../data/graspdata", type=str)
     parser.add_argument('--dst', default="../data/dataset", type=str)
+    parser.add_argument('--hand_model_type', default='shadow_hand', type=str, choices=['shadow_hand', 'dexhand021'])
     args = parser.parse_args()
 
     if ("CUDA_VISIBLE_DEVICES" not in os.environ.keys()):
@@ -27,5 +28,5 @@ if __name__ == "__main__":
     with open("run.sh", "w") as f:
         for code in os.listdir(args.src):
             f.write(
-                f"python scripts/validate_grasps.py --gpu {gpu_list[gpu_cnt%len(gpu_list)]} --val_batch {args.val_batch} --mesh_path {args.mesh_path} --grasp_path {args.src} --result_path {args.dst} --object_code {code[:-4]}\n")
+                f"python scripts/validate_grasps.py --gpu {gpu_list[gpu_cnt%len(gpu_list)]} --val_batch {args.val_batch} --mesh_path {args.mesh_path} --grasp_path {args.src} --result_path {args.dst} --hand_model_type {args.hand_model_type} --object_code {code[:-4]}\n")
             gpu_cnt += 1
