@@ -44,13 +44,19 @@ def initialize_convex_hull(hand_model, object_model, args):
         # dexhand021: 20 DOF. Finger forward is +X in the native frame.
         if joint_angles_mu_dexhand021 is None:
             raise ImportError("dexhand021 default angles not found. Please check config/dexhand021_default_angles.py")
-        joint_angles_mu = joint_angles_mu_dexhand021.to(device)
-        # Use the desired initialization orientation (aligned to visualization)
-        rotation_hand = torch.tensor(
-            transforms3d.euler.euler2mat(np.pi, np.deg2rad(-30), np.pi / 2, axes='sxyz'),
-            dtype=torch.float,
-            device=device
-        )
+        joint_angles_mu = torch.tensor([
+            np.deg2rad(70), 0.3, 0.3, 0.3,
+            0.0, 0.3, 0.3, 0.3,
+            0.0, 0.3, 0.3, 0.3,
+            0.0, 0.3, 0.3, 0.3,
+            0.0, 0.3, 0.3, 0.3
+        ], dtype=torch.float, device=device)
+        # Predefined initialization orientations (randomly chosen per sample)
+        rotation_hand_candidates = [
+            torch.tensor(transforms3d.euler.euler2mat(np.pi / 2, 0, 0, axes='sxyz'), dtype=torch.float, device=device),
+            torch.tensor(transforms3d.euler.euler2mat(0, 0, 0, axes='sxyz'), dtype=torch.float, device=device),
+            torch.tensor(transforms3d.euler.euler2mat(np.pi / 2, 0, np.pi / 2, axes='sxyz'), dtype=torch.float, device=device),
+        ]
         approach_direction = torch.tensor([0, 0, 1], dtype=torch.float, device=device)
         # Adjust sampling ranges for the larger dexhand021 geometry
         distance_lower = args.distance_lower * args.dexhand_distance_scale
@@ -83,6 +89,8 @@ def initialize_convex_hull(hand_model, object_model, args):
         mesh_origin = tm.Trimesh(vertices, faces)
         if hasattr(mesh_origin, 'nondegenerate_faces'):
             mesh_origin.update_faces(mesh_origin.nondegenerate_faces())
+        obj_bounds = mesh_origin.bounds
+        obj_height = float(obj_bounds[1][2] - obj_bounds[0][2])
         vertices += 0.2 * vertices / np.linalg.norm(vertices, axis=1, keepdims=True)
         mesh = tm.Trimesh(vertices=vertices, faces=faces).convex_hull
         vertices = torch.tensor(mesh.vertices, dtype=torch.float, device=device)
@@ -101,8 +109,8 @@ def initialize_convex_hull(hand_model, object_model, args):
 
         distance = distance_lower + (distance_upper - distance_lower) * torch.rand([batch_size_each], dtype=torch.float, device=device)
         deviate_theta = theta_lower + (theta_upper - theta_lower) * torch.rand([batch_size_each], dtype=torch.float, device=device)
-        process_theta = 2 * math.pi * torch.rand([batch_size_each], dtype=torch.float, device=device)
-        rotate_theta = 2 * math.pi * torch.rand([batch_size_each], dtype=torch.float, device=device)
+        process_theta = torch.zeros([batch_size_each], dtype=torch.float, device=device)
+        rotate_theta = torch.zeros([batch_size_each], dtype=torch.float, device=device)
 
         # solve transformation
         # rotation_hand: rotate the hand to align its grasping direction with the +z axis
@@ -112,13 +120,37 @@ def initialize_convex_hull(hand_model, object_model, args):
         rotation_local = torch.zeros([batch_size_each, 3, 3], dtype=torch.float, device=device)
         rotation_global = torch.zeros([batch_size_each, 3, 3], dtype=torch.float, device=device)
         for j in range(batch_size_each):
-            rotation_local[j] = torch.tensor(transforms3d.euler.euler2mat(process_theta[j], deviate_theta[j], rotate_theta[j], axes='rzxz'), dtype=torch.float, device=device)
-            rotation_global[j] = torch.tensor(transforms3d.euler.euler2mat(math.atan2(n[j, 1], n[j, 0]) - math.pi / 2, -math.acos(n[j, 2]), 0, axes='rzxz'), dtype=torch.float, device=device)
+            rotation_local[j] = torch.eye(3, dtype=torch.float, device=device)
+            rotation_global[j] = torch.eye(3, dtype=torch.float, device=device)
 
         # Use hand-specific approach direction (defined above based on hand model type)
         translation[i * batch_size_each: (i + 1) * batch_size_each] = p - distance.unsqueeze(1) * (rotation_global @ rotation_local @ approach_direction.reshape(1, -1, 1)).squeeze(2)
         # Use hand-specific rotation_hand (defined above based on hand model type)
-        rotation[i * batch_size_each: (i + 1) * batch_size_each] = rotation_global @ rotation_local @ rotation_hand
+        if hand_model_type == 'HandModelDexHand021':
+            choices = torch.randint(0, len(rotation_hand_candidates), (batch_size_each,), device=device)
+            rotation_hand = torch.stack([rotation_hand_candidates[c] for c in choices], dim=0)
+            rotation[i * batch_size_each: (i + 1) * batch_size_each] = rotation_hand
+            # Apply base position constraints per rotation choice.
+            sl = slice(i * batch_size_each, (i + 1) * batch_size_each)
+            t = translation[sl]
+            eps = 1e-6
+            x = t[:, 0]
+            y = t[:, 1]
+            z = t[:, 2]
+            # All choices: base x > 0
+            x = torch.where(x <= 0, -x + eps, x)
+            # Choice 1 (index 1): base z fixed to 0.3, base x > 0
+            mask1 = choices == 1
+            z = torch.where(mask1, torch.full_like(z, 0.3), z)
+            # Choice 2 (index 2): base x > 0, base y < 0
+            mask2 = choices == 2
+            y = torch.where(mask2 & (y >= 0), -y - 0.01, y)
+            t[:, 0] = x
+            t[:, 1] = y
+            t[:, 2] = z
+            translation[sl] = t
+        else:
+            rotation[i * batch_size_each: (i + 1) * batch_size_each] = rotation_global @ rotation_local @ rotation_hand
     
     # initialize joint angles
     # joint_angles_mu and rotation_hand are already defined above based on hand model type

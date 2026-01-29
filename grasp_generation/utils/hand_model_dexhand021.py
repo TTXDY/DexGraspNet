@@ -329,6 +329,9 @@ class HandModelDexHand021:
 
     def _link_origin_world_batch(self, link_name):
         matrix = self.current_status[link_name].get_matrix()
+        batch_size = self.global_translation.shape[0]
+        if matrix.shape[0] == 1 and batch_size > 1:
+            matrix = matrix.expand(batch_size, 4, 4)
         origin = matrix[:, :3, 3]
         origin = torch.bmm(origin.unsqueeze(1), self.global_rotation.transpose(1, 2)).squeeze(1)
         return origin + self.global_translation
@@ -342,6 +345,40 @@ class HandModelDexHand021:
             pts = pts.unsqueeze(0)
         pts = pts @ self.global_rotation.transpose(1, 2) + self.global_translation.unsqueeze(1)
         return pts
+
+    def _build_palm_box_world_batch(self):
+        # Build a palm box from link1 positions (index/middle/ring/pinky) and right_hand_base.
+        required = [
+            "r_f_link2_1_child",  # index
+            "r_f_link3_1_child",  # middle
+            "r_f_link4_1_child",  # ring
+            "r_f_link5_1_child",  # pinky
+            "right_hand_base",
+        ]
+        batch_size = self.global_translation.shape[0]
+        for name in required:
+            if name not in self.mesh:
+                return None
+        p_index = self._link_origin_world_batch("r_f_link2_1_child")
+        p_middle = self._link_origin_world_batch("r_f_link3_1_child")
+        p_ring = self._link_origin_world_batch("r_f_link4_1_child")
+        p_pinky = self._link_origin_world_batch("r_f_link5_1_child")
+        p_base = self._link_origin_world_batch("right_hand_base")
+
+        base_matrix = self.current_status["right_hand_base"].get_matrix()
+        if base_matrix.shape[0] == 1 and batch_size > 1:
+            base_matrix = base_matrix.expand(batch_size, 4, 4)
+        axes = base_matrix[:, :3, :3]
+        x_axis = axes[:, :, 0]
+        y_axis = axes[:, :, 1]
+        z_axis = axes[:, :, 2]
+        # Fixed palm box size (meters)
+        width_len = torch.full((batch_size,), 0.10, dtype=self.global_translation.dtype, device=self.device)
+        length_len = torch.full((batch_size,), 0.15, dtype=self.global_translation.dtype, device=self.device)
+        height = 0.02
+        extents = torch.stack([width_len * 0.5, length_len * 0.5, torch.full_like(width_len, height * 0.5)], dim=1)
+        center = p_base + 0.5 * length_len.unsqueeze(1) * y_axis
+        return center, axes, extents
 
     def _build_collision_capsules_world(self):
         batch_size = self.global_translation.shape[0]
@@ -437,6 +474,7 @@ class HandModelDexHand021:
                 raise ValueError(f"x must be (B, N, 3), got {x.shape}")
         x_world = x
         capsules = self._build_collision_capsules_world()
+        palm_box = self._build_palm_box_world_batch()
         for p0, p1, radius in capsules:
             if p0.dim() == 1:
                 p0 = p0.unsqueeze(0)
@@ -453,6 +491,15 @@ class HandModelDexHand021:
             closest = p0.unsqueeze(1) + t.unsqueeze(2) * v.unsqueeze(1)
             d = radius - (x_world - closest).norm(dim=2)
             dis.append(d)
+        if palm_box is not None:
+            center, axes, extents = palm_box
+            x_local = torch.bmm(x_world - center.unsqueeze(1), axes)
+            q = x_local.abs() - extents.unsqueeze(1)
+            outside = torch.clamp(q, min=0.0)
+            outside_dist = outside.norm(dim=2)
+            inside = torch.minimum(torch.maximum(q[..., 0], torch.maximum(q[..., 1], q[..., 2])), torch.zeros_like(q[..., 0]))
+            sdf = outside_dist + inside
+            dis.append(-sdf)
         if not dis:
             raise RuntimeError("No collision capsules found for DexHand021 distance computation.")
         dis = torch.max(torch.stack(dis, dim=0), dim=0)[0]

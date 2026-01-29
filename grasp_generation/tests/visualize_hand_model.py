@@ -52,7 +52,7 @@ if __name__ == '__main__':
         )
         # dexhand021 default joint angles (20 DOF)
         joint_angles = torch.tensor([
-            np.deg2rad(50), 0.3, 0.3, 0.3,  # Finger 1 (thumb) - first link set to 50 deg
+            np.deg2rad(70), 0.3, 0.3, 0.3,  # Finger 1 (thumb) - first link set to 70 deg
             0.0, 0.3, 0.3, 0.3,            # Finger 2
             0.0, 0.3, 0.3, 0.3,            # Finger 3
             0.0, 0.3, 0.3, 0.3,            # Finger 4
@@ -73,8 +73,8 @@ if __name__ == '__main__':
         print(f'Visualizing Shadow Hand ({hand_model.n_dofs} DOF)')
 
     if args.hand_model_type == 'dexhand021':
-        # rotation = torch.tensor(transforms3d.euler.euler2mat(0, np.deg2rad(0), 0, axes='sxyz'), dtype=torch.float, device=device)
-        rotation = torch.tensor(transforms3d.euler.euler2mat(np.pi, np.deg2rad(-30), np.pi / 2, axes='sxyz'), dtype=torch.float, device=device)
+        # rotation = torch.tensor(transforms3d.euler.euler2mat(np.pi, np.deg2rad(-30), np.pi / 2, axes='sxyz'), dtype=torch.float, device=device)
+        rotation = torch.tensor(transforms3d.euler.euler2mat(np.pi / 2, 0, np.pi / 2, axes='sxyz'), dtype=torch.float, device=device)
 
     else:
         rotation = torch.tensor(transforms3d.euler.euler2mat(0, -np.pi / 3, 0, axes='rzxz'), dtype=torch.float, device=device)
@@ -146,6 +146,39 @@ if __name__ == '__main__':
                 collision_capsules_plotly.append(
                     go.Mesh3d(x=v[:, 0], y=v[:, 1], z=v[:, 2], i=f[:, 0], j=f[:, 1], k=f[:, 2], color='yellow', opacity=0.35)
                 )
+        # Palm box
+        palm_box = hand_model._build_palm_box_world_batch()
+        if palm_box is not None and not args.only_boxes:
+            center, axes, extents = palm_box
+            center = center[0].detach().cpu().numpy()
+            axes = axes[0].detach().cpu().numpy()
+            extents = extents[0].detach().cpu().numpy()
+            # 8 corners in local frame
+            sx, sy, sz = extents
+            corners = np.array([
+                [-sx, -sy, -sz],
+                [ sx, -sy, -sz],
+                [ sx,  sy, -sz],
+                [-sx,  sy, -sz],
+                [-sx, -sy,  sz],
+                [ sx, -sy,  sz],
+                [ sx,  sy,  sz],
+                [-sx,  sy,  sz],
+            ])
+            verts = corners @ axes.T + center
+            faces = np.array([
+                [0, 1, 2], [0, 2, 3],
+                [4, 5, 6], [4, 6, 7],
+                [0, 1, 5], [0, 5, 4],
+                [2, 3, 7], [2, 7, 6],
+                [1, 2, 6], [1, 6, 5],
+                [0, 3, 7], [0, 7, 4],
+            ])
+            collision_capsules_plotly.append(
+                go.Mesh3d(x=verts[:, 0], y=verts[:, 1], z=verts[:, 2],
+                          i=faces[:, 0], j=faces[:, 1], k=faces[:, 2],
+                          color='orange', opacity=0.4)
+            )
     else:
         # Shadow Hand collision proxies (capsules/boxes) in yellow
         for link_name in hand_model.mesh:

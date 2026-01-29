@@ -5,6 +5,7 @@ Description: Entry of the program, generate small-scale experiments
 """
 
 import os
+import sys
 
 if __file__ and os.path.dirname(__file__):
     os.chdir(os.path.dirname(__file__))
@@ -77,6 +78,8 @@ parser.add_argument('--object_num_samples', default=2000, type=int,
                     help='Number of object surface points used for E_pen (higher = more accurate, slower).')
 
 args = parser.parse_args()
+if args.hand_model_type == 'dexhand021' and '--w_dis' not in sys.argv:
+    args.w_dis = 300.0
 
 # Fix object_code_list if it's a string from command line
 if isinstance(args.object_code_list, str):
