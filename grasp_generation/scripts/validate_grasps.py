@@ -42,6 +42,7 @@ if __name__ == '__main__':
     translation_names = ['WRJTx', 'WRJTy', 'WRJTz']
     rot_names = ['WRJRx', 'WRJRy', 'WRJRz']
     if args.hand_model_type == 'dexhand021':
+        control_names = HandModelDexHand021.CONTROL_NAMES
         joint_names = [
             'r_f_joint1_1', 'r_f_joint1_2', 'r_f_joint1_3', 'r_f_joint1_4',
             'r_f_joint2_1', 'r_f_joint2_2', 'r_f_joint2_3', 'r_f_joint2_4',
@@ -82,8 +83,42 @@ if __name__ == '__main__':
                 rot = align_inv @ rot
                 translation = (align_inv @ translation.unsqueeze(1)).squeeze(1)
             rot = rot[:, :2].T.ravel().tolist()
-            hand_pose = torch.tensor(translation.tolist() + rot + [
-                qpos[name] for name in joint_names], dtype=torch.float, device=device)
+            if args.hand_model_type == 'dexhand021':
+                controls = None
+                if 'controls' in data_dict[i]:
+                    controls_entry = data_dict[i]['controls']
+                    if isinstance(controls_entry, dict):
+                        controls = [controls_entry[name] for name in control_names]
+                    else:
+                        controls = list(controls_entry)
+                elif all(name in qpos for name in control_names):
+                    controls = [qpos[name] for name in control_names]
+                else:
+                    # Fallback: derive controls from joint qpos (approximate if uncoupled).
+                    def get(name, default=0.0):
+                        return qpos.get(name, default)
+                    if all(name in qpos for name in ['r_f_joint2_1', 'r_f_joint4_1', 'r_f_joint5_1']):
+                        spread = (get('r_f_joint2_1') + get('r_f_joint4_1') + 0.5 * get('r_f_joint5_1')) / 3.0
+                    else:
+                        spread = get('r_f_joint2_1')
+                    controls = [
+                        get('r_f_joint1_1'),
+                        get('r_f_joint1_2'),
+                        get('r_f_joint1_3'),
+                        spread,
+                        get('r_f_joint2_2'),
+                        get('r_f_joint2_3'),
+                        get('r_f_joint3_2'),
+                        get('r_f_joint3_3'),
+                        get('r_f_joint4_2'),
+                        get('r_f_joint4_3'),
+                        get('r_f_joint5_2'),
+                        get('r_f_joint5_3'),
+                    ]
+                hand_pose = torch.tensor(translation.tolist() + rot + controls, dtype=torch.float, device=device)
+            else:
+                hand_pose = torch.tensor(translation.tolist() + rot + [
+                    qpos[name] for name in joint_names], dtype=torch.float, device=device)
             hand_state.append(hand_pose)
             scale_tensor.append(scale)
         hand_state = torch.stack(hand_state).to(device).requires_grad_()

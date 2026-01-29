@@ -179,13 +179,8 @@ def generate(args_list):
     translation_names = ['WRJTx', 'WRJTy', 'WRJTz']
     rot_names = ['WRJRx', 'WRJRy', 'WRJRz']
     if args.hand_model_type == 'dexhand021':
-        joint_names = [
-            'r_f_joint1_1', 'r_f_joint1_2', 'r_f_joint1_3', 'r_f_joint1_4',
-            'r_f_joint2_1', 'r_f_joint2_2', 'r_f_joint2_3', 'r_f_joint2_4',
-            'r_f_joint3_1', 'r_f_joint3_2', 'r_f_joint3_3', 'r_f_joint3_4',
-            'r_f_joint4_1', 'r_f_joint4_2', 'r_f_joint4_3', 'r_f_joint4_4',
-            'r_f_joint5_1', 'r_f_joint5_2', 'r_f_joint5_3', 'r_f_joint5_4'
-        ]
+        joint_names_full = hand_model.joints_names_full
+        control_names = hand_model.joints_names
     else:
         joint_names = [
             'robot0:FFJ3', 'robot0:FFJ2', 'robot0:FFJ1', 'robot0:FFJ0',
@@ -200,7 +195,13 @@ def generate(args_list):
             idx = i * args.batch_size_each + j
             scale = object_model.object_scale_tensor[i][j].item()
             hand_pose = hand_model.hand_pose[idx].detach().cpu()
-            qpos = dict(zip(joint_names, hand_pose[9:].tolist()))
+            if args.hand_model_type == 'dexhand021':
+                joint_angles_full = hand_model.controls_to_joint_angles(hand_pose[9:]).squeeze(0).detach().cpu()
+                qpos = dict(zip(joint_names_full, joint_angles_full.tolist()))
+                controls = dict(zip(control_names, hand_pose[9:].tolist()))
+            else:
+                qpos = dict(zip(joint_names, hand_pose[9:].tolist()))
+                controls = None
             rot = robust_compute_rotation_matrix_from_ortho6d(hand_pose[3:9].unsqueeze(0))[0]
             if args.hand_model_type == 'dexhand021':
                 align = get_dexhand021_output_alignment(device=hand_pose.device)
@@ -212,7 +213,13 @@ def generate(args_list):
             qpos.update(dict(zip(rot_names, euler)))
             qpos.update(dict(zip(translation_names, translation.tolist())))
             hand_pose = hand_pose_st[idx].detach().cpu()
-            qpos_st = dict(zip(joint_names, hand_pose[9:].tolist()))
+            if args.hand_model_type == 'dexhand021':
+                joint_angles_full_st = hand_model.controls_to_joint_angles(hand_pose[9:]).squeeze(0).detach().cpu()
+                qpos_st = dict(zip(joint_names_full, joint_angles_full_st.tolist()))
+                controls_st = dict(zip(control_names, hand_pose[9:].tolist()))
+            else:
+                qpos_st = dict(zip(joint_names, hand_pose[9:].tolist()))
+                controls_st = None
             rot = robust_compute_rotation_matrix_from_ortho6d(hand_pose[3:9].unsqueeze(0))[0]
             if args.hand_model_type == 'dexhand021':
                 align = get_dexhand021_output_alignment(device=hand_pose.device)
@@ -227,6 +234,8 @@ def generate(args_list):
                 scale=scale,
                 qpos=qpos,
                 qpos_st=qpos_st,
+                controls=controls,
+                controls_st=controls_st,
                 energy=energy[idx].item(),
                 E_fc=E_fc[idx].item(),
                 E_dis=E_dis[idx].item(),

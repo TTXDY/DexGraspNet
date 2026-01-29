@@ -86,6 +86,8 @@ if __name__ == '__main__':
     joint_names = hand_model.joints_names
     if len(joint_names) != hand_model.n_dofs:
         raise ValueError(f"Joint name count ({len(joint_names)}) does not match DOF ({hand_model.n_dofs}).")
+    if args.hand_model_type == 'dexhand021':
+        control_names = joint_names
 
     # Extract poses (dexhand021 uses native frame)
     if 'hand_pose_raw' in data_dict:
@@ -95,13 +97,77 @@ if __name__ == '__main__':
         qpos = data_dict['qpos']
         rot = np.array(transforms3d.euler.euler2mat(*[qpos[name] for name in rot_names]))
         rot = rot[:, :2].T.ravel().tolist()
-        hand_pose = torch.tensor([qpos[name] for name in translation_names] + rot + [qpos[name] for name in joint_names], dtype=torch.float, device=device)
+        if args.hand_model_type == 'dexhand021':
+            if 'controls' in data_dict:
+                controls_entry = data_dict['controls']
+                if isinstance(controls_entry, dict):
+                    controls = [controls_entry[name] for name in control_names]
+                else:
+                    controls = list(controls_entry)
+            elif all(name in qpos for name in control_names):
+                controls = [qpos[name] for name in control_names]
+            else:
+                def get(name, default=0.0):
+                    return qpos.get(name, default)
+                if all(name in qpos for name in ['r_f_joint2_1', 'r_f_joint4_1', 'r_f_joint5_1']):
+                    spread = (get('r_f_joint2_1') + get('r_f_joint4_1') + 0.5 * get('r_f_joint5_1')) / 3.0
+                else:
+                    spread = get('r_f_joint2_1')
+                controls = [
+                    get('r_f_joint1_1'),
+                    get('r_f_joint1_2'),
+                    get('r_f_joint1_3'),
+                    spread,
+                    get('r_f_joint2_2'),
+                    get('r_f_joint2_3'),
+                    get('r_f_joint3_2'),
+                    get('r_f_joint3_3'),
+                    get('r_f_joint4_2'),
+                    get('r_f_joint4_3'),
+                    get('r_f_joint5_2'),
+                    get('r_f_joint5_3'),
+                ]
+            hand_pose = torch.tensor([qpos[name] for name in translation_names] + rot + controls, dtype=torch.float, device=device)
+        else:
+            hand_pose = torch.tensor([qpos[name] for name in translation_names] + rot + [qpos[name] for name in joint_names], dtype=torch.float, device=device)
 
     if 'qpos_st' in data_dict and not args.no_init:
         qpos_st = data_dict['qpos_st']
         rot = np.array(transforms3d.euler.euler2mat(*[qpos_st[name] for name in rot_names]))
         rot = rot[:, :2].T.ravel().tolist()
-        hand_pose_st = torch.tensor([qpos_st[name] for name in translation_names] + rot + [qpos_st[name] for name in joint_names], dtype=torch.float, device=device)
+        if args.hand_model_type == 'dexhand021':
+            if 'controls_st' in data_dict:
+                controls_entry = data_dict['controls_st']
+                if isinstance(controls_entry, dict):
+                    controls = [controls_entry[name] for name in control_names]
+                else:
+                    controls = list(controls_entry)
+            elif all(name in qpos_st for name in control_names):
+                controls = [qpos_st[name] for name in control_names]
+            else:
+                def get(name, default=0.0):
+                    return qpos_st.get(name, default)
+                if all(name in qpos_st for name in ['r_f_joint2_1', 'r_f_joint4_1', 'r_f_joint5_1']):
+                    spread = (get('r_f_joint2_1') + get('r_f_joint4_1') + 0.5 * get('r_f_joint5_1')) / 3.0
+                else:
+                    spread = get('r_f_joint2_1')
+                controls = [
+                    get('r_f_joint1_1'),
+                    get('r_f_joint1_2'),
+                    get('r_f_joint1_3'),
+                    spread,
+                    get('r_f_joint2_2'),
+                    get('r_f_joint2_3'),
+                    get('r_f_joint3_2'),
+                    get('r_f_joint3_3'),
+                    get('r_f_joint4_2'),
+                    get('r_f_joint4_3'),
+                    get('r_f_joint5_2'),
+                    get('r_f_joint5_3'),
+                ]
+            hand_pose_st = torch.tensor([qpos_st[name] for name in translation_names] + rot + controls, dtype=torch.float, device=device)
+        else:
+            hand_pose_st = torch.tensor([qpos_st[name] for name in translation_names] + rot + [qpos_st[name] for name in joint_names], dtype=torch.float, device=device)
         print(f"   ✓ Initial pose loaded")
     else:
         hand_pose_st = None

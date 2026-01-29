@@ -130,7 +130,10 @@ class Annealing:
             self.hand_model.contact_point_indices[reject] = self.old_contact_point_indices[reject]
             self.hand_model.global_translation[reject] = self.old_global_transformation[reject]
             self.hand_model.global_rotation[reject] = self.old_global_rotation[reject]
-            self.hand_model.current_status = self.hand_model.chain.forward_kinematics(self.hand_model.hand_pose[:, 9:])
+            if hasattr(self.hand_model, "recompute_fk"):
+                self.hand_model.recompute_fk()
+            else:
+                self.hand_model.current_status = self.hand_model.chain.forward_kinematics(self.hand_model.hand_pose[:, 9:])
             self.hand_model.contact_points[reject] = self.old_contact_points[reject]
             self.hand_model.hand_pose.grad[reject] = self.old_grad_hand_pose[reject]
 

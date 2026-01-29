@@ -3,7 +3,7 @@ HandModel adapter for dexhand021 hand
 Adapted from hand_model.py for Shadow Hand
 
 Key differences from Shadow Hand:
-- 20 DOF (5 fingers × 4 joints) vs 22 DOF
+- 12-DOF control space (mapped to 20 joints) vs 22 DOF
 - X-axis coordinate system (vs Z-axis)
 - Explicit 6 DOF floating base in MJCF
 - Uses fromto capsules (vs pos+size capsules)
@@ -31,6 +31,29 @@ def get_dexhand021_output_alignment(device=None, dtype=torch.float):
 
 
 class HandModelDexHand021:
+    # Control-space names (12 inputs) and full joint names (20 joints)
+    CONTROL_NAMES = [
+        "ctrl_thumb_spread",
+        "ctrl_thumb_mcp",
+        "ctrl_thumb_dip",
+        "ctrl_finger_spread",
+        "ctrl_index_mcp",
+        "ctrl_index_dip",
+        "ctrl_middle_mcp",
+        "ctrl_middle_dip",
+        "ctrl_ring_mcp",
+        "ctrl_ring_dip",
+        "ctrl_pinky_mcp",
+        "ctrl_pinky_dip",
+    ]
+
+    JOINT_NAMES = [
+        "r_f_joint1_1", "r_f_joint1_2", "r_f_joint1_3", "r_f_joint1_4",
+        "r_f_joint2_1", "r_f_joint2_2", "r_f_joint2_3", "r_f_joint2_4",
+        "r_f_joint3_1", "r_f_joint3_2", "r_f_joint3_3", "r_f_joint3_4",
+        "r_f_joint4_1", "r_f_joint4_2", "r_f_joint4_3", "r_f_joint4_4",
+        "r_f_joint5_1", "r_f_joint5_2", "r_f_joint5_3", "r_f_joint5_4",
+    ]
     @staticmethod
     def _parse_points_list(points, key, name):
         if points is None:
@@ -116,6 +139,7 @@ class HandModelDexHand021:
 
         self.chain = pk.build_chain_from_mjcf(open(mjcf_path, 'rb').read()).to(dtype=torch.float, device=device)
         self.joint_names_all = self.chain.get_joint_parameter_names()
+        self.joint_name_to_all_index = {name: i for i, name in enumerate(self.joint_names_all)}
         self.base_joint_names = {'ARTx', 'ARTy', 'ARTz', 'ARRx', 'ARRy', 'ARRz'}
         self.base_joint_indices = [i for i, name in enumerate(self.joint_names_all) if name in self.base_joint_names]
         self.hand_joint_indices = [i for i, name in enumerate(self.joint_names_all) if name not in self.base_joint_names]
@@ -219,6 +243,47 @@ class HandModelDexHand021:
             self.joints_lower = self.joints_lower.index_select(0, hand_joint_indices)
             self.joints_upper = self.joints_upper.index_select(0, hand_joint_indices)
 
+        # Cache full joint limits/names (20 DOF) before switching to control space.
+        full_lower_map = dict(zip(self.joints_names, self.joints_lower))
+        full_upper_map = dict(zip(self.joints_names, self.joints_upper))
+        self.joints_names_full = list(self.JOINT_NAMES)
+        self.joints_lower_full = torch.stack([full_lower_map[name] for name in self.joints_names_full]).to(device)
+        self.joints_upper_full = torch.stack([full_upper_map[name] for name in self.joints_names_full]).to(device)
+
+        # Switch to 12-DOF control space for optimization.
+        self.joints_names = list(self.CONTROL_NAMES)
+        self.joints_lower = torch.tensor([
+            0.0,  # ctrl_thumb_spread
+            0.0,  # ctrl_thumb_mcp
+            0.0,  # ctrl_thumb_dip
+            0.0,  # ctrl_finger_spread
+            0.0,  # ctrl_index_mcp
+            0.0,  # ctrl_index_dip
+            0.0,  # ctrl_middle_mcp
+            0.0,  # ctrl_middle_dip
+            0.0,  # ctrl_ring_mcp
+            0.0,  # ctrl_ring_dip
+            0.0,  # ctrl_pinky_mcp
+            0.0,  # ctrl_pinky_dip
+        ], dtype=torch.float, device=device)
+        self.joints_upper = torch.tensor([
+            2.2,  # ctrl_thumb_spread
+            1.3,  # ctrl_thumb_mcp
+            1.3,  # ctrl_thumb_dip
+            0.3,  # ctrl_finger_spread (maps to pinky *2)
+            1.3,  # ctrl_index_mcp
+            1.3,  # ctrl_index_dip
+            1.3,  # ctrl_middle_mcp
+            1.3,  # ctrl_middle_dip
+            1.3,  # ctrl_ring_mcp
+            1.3,  # ctrl_ring_dip
+            1.3,  # ctrl_pinky_mcp
+            1.3,  # ctrl_pinky_dip
+        ], dtype=torch.float, device=device)
+        self.n_dofs = len(self.joints_names)
+
+        self.joint_name_to_full_index = {name: i for i, name in enumerate(self.JOINT_NAMES)}
+
         # sample surface points
 
         total_area = sum(areas.values())
@@ -287,13 +352,10 @@ class HandModelDexHand021:
             self.hand_pose.retain_grad()
         self.global_translation = self.hand_pose[:, 0:3]
         self.global_rotation = robust_compute_rotation_matrix_from_ortho6d(self.hand_pose[:, 3:9])
-        joint_angles = self.hand_pose[:, 9:]
-        if self.base_joint_indices:
-            full_joint_angles = torch.zeros(joint_angles.shape[0], self.n_dofs_all, dtype=joint_angles.dtype, device=self.device)
-            full_joint_angles[:, self.hand_joint_indices] = joint_angles
-            self.current_status = self.chain.forward_kinematics(full_joint_angles)
-        else:
-            self.current_status = self.chain.forward_kinematics(joint_angles)
+        control_angles = self.hand_pose[:, 9:]
+        full_joint_angles = self._controls_to_full_joint_angles(control_angles)
+        self.current_status = self.chain.forward_kinematics(full_joint_angles)
+        self.joint_angles_full = self._controls_to_joint_angles_full(control_angles)
         if contact_point_indices is not None:
             self.contact_point_indices = contact_point_indices
             batch_size, n_contact = contact_point_indices.shape
@@ -310,6 +372,107 @@ class HandModelDexHand021:
             self.contact_points = (transforms @ self.contact_points.unsqueeze(3))[:, :, :3, 0]
             self.contact_points = self.contact_points @ self.global_rotation.transpose(1, 2) + self.global_translation.unsqueeze(1)
 
+    def _controls_to_full_joint_angles(self, control_angles):
+        batch_size = control_angles.shape[0]
+        full_joint_angles = torch.zeros(batch_size, self.n_dofs_all, dtype=control_angles.dtype, device=self.device)
+
+        def set_joint(name, value):
+            idx = self.joint_name_to_all_index.get(name)
+            if idx is not None:
+                full_joint_angles[:, idx] = value
+
+        # Thumb
+        set_joint("r_f_joint1_1", control_angles[:, 0])
+        set_joint("r_f_joint1_2", control_angles[:, 1])
+        set_joint("r_f_joint1_3", control_angles[:, 2])
+        set_joint("r_f_joint1_4", control_angles[:, 2])
+
+        # Finger spread (index/ring/pinky with pinky 2x)
+        spread = control_angles[:, 3]
+        set_joint("r_f_joint2_1", spread)
+        set_joint("r_f_joint4_1", spread)
+        set_joint("r_f_joint5_1", 2.0 * spread)
+
+        # Index
+        set_joint("r_f_joint2_2", control_angles[:, 4])
+        set_joint("r_f_joint2_3", control_angles[:, 5])
+        set_joint("r_f_joint2_4", control_angles[:, 5])
+
+        # Middle (joint3_1 locked to 0)
+        set_joint("r_f_joint3_1", torch.zeros_like(control_angles[:, 0]))
+        set_joint("r_f_joint3_2", control_angles[:, 6])
+        set_joint("r_f_joint3_3", control_angles[:, 7])
+        set_joint("r_f_joint3_4", control_angles[:, 7])
+
+        # Ring
+        set_joint("r_f_joint4_2", control_angles[:, 8])
+        set_joint("r_f_joint4_3", control_angles[:, 9])
+        set_joint("r_f_joint4_4", control_angles[:, 9])
+
+        # Pinky
+        set_joint("r_f_joint5_2", control_angles[:, 10])
+        set_joint("r_f_joint5_3", control_angles[:, 11])
+        set_joint("r_f_joint5_4", control_angles[:, 11])
+
+        return full_joint_angles
+
+    def _controls_to_joint_angles_full(self, control_angles):
+        batch_size = control_angles.shape[0]
+        joint_angles = torch.zeros(batch_size, len(self.JOINT_NAMES), dtype=control_angles.dtype, device=self.device)
+
+        def set_joint(name, value):
+            idx = self.joint_name_to_full_index.get(name)
+            if idx is not None:
+                joint_angles[:, idx] = value
+
+        # Thumb
+        set_joint("r_f_joint1_1", control_angles[:, 0])
+        set_joint("r_f_joint1_2", control_angles[:, 1])
+        set_joint("r_f_joint1_3", control_angles[:, 2])
+        set_joint("r_f_joint1_4", control_angles[:, 2])
+
+        # Finger spread (index/ring/pinky with pinky 2x)
+        spread = control_angles[:, 3]
+        set_joint("r_f_joint2_1", spread)
+        set_joint("r_f_joint4_1", spread)
+        set_joint("r_f_joint5_1", 2.0 * spread)
+
+        # Index
+        set_joint("r_f_joint2_2", control_angles[:, 4])
+        set_joint("r_f_joint2_3", control_angles[:, 5])
+        set_joint("r_f_joint2_4", control_angles[:, 5])
+
+        # Middle (joint3_1 locked to 0)
+        set_joint("r_f_joint3_1", torch.zeros_like(control_angles[:, 0]))
+        set_joint("r_f_joint3_2", control_angles[:, 6])
+        set_joint("r_f_joint3_3", control_angles[:, 7])
+        set_joint("r_f_joint3_4", control_angles[:, 7])
+
+        # Ring
+        set_joint("r_f_joint4_2", control_angles[:, 8])
+        set_joint("r_f_joint4_3", control_angles[:, 9])
+        set_joint("r_f_joint4_4", control_angles[:, 9])
+
+        # Pinky
+        set_joint("r_f_joint5_2", control_angles[:, 10])
+        set_joint("r_f_joint5_3", control_angles[:, 11])
+        set_joint("r_f_joint5_4", control_angles[:, 11])
+
+        return joint_angles
+
+    def controls_to_joint_angles(self, control_angles):
+        if control_angles.dim() == 1:
+            control_angles = control_angles.unsqueeze(0)
+        if control_angles.device != self.device:
+            control_angles = control_angles.to(self.device)
+        return self._controls_to_joint_angles_full(control_angles)
+
+    def recompute_fk(self):
+        if self.hand_pose is None:
+            return
+        control_angles = self.hand_pose[:, 9:]
+        full_joint_angles = self._controls_to_full_joint_angles(control_angles)
+        self.current_status = self.chain.forward_kinematics(full_joint_angles)
     # NOTE: Single-sample helper for debugging/visualization; batch logic uses _link_origin_world_batch.
     def _link_origin_world(self, link_name):
         matrix = self.current_status[link_name].get_matrix()[0]

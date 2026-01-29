@@ -50,13 +50,13 @@ if __name__ == '__main__':
             n_surface_points=2000,
             device=device
         )
-        # dexhand021 default joint angles (20 DOF)
+        # dexhand021 default control angles (12 DOF)
         joint_angles = torch.tensor([
-            np.deg2rad(70), 0.3, 0.3, 0.3,  # Finger 1 (thumb) - first link set to 70 deg
-            0.0, 0.3, 0.3, 0.3,            # Finger 2
-            0.0, 0.3, 0.3, 0.3,            # Finger 3
-            0.0, 0.3, 0.3, 0.3,            # Finger 4
-            0.0, 0.3, 0.3, 0.3             # Finger 5
+            np.deg2rad(70), 0.3, 0.3, 0.15,  # Thumb spread/MCP/DIP, finger spread
+            0.3, 0.3,                        # Index MCP/DIP
+            0.3, 0.3,                        # Middle MCP/DIP
+            0.3, 0.3,                        # Ring MCP/DIP
+            0.3, 0.3                         # Pinky MCP/DIP
         ], dtype=torch.float, device=device)
         print(f'Visualizing dexhand021 ({hand_model.n_dofs} DOF)')
     else:

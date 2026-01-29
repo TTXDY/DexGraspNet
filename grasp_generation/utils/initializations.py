@@ -41,16 +41,10 @@ def initialize_convex_hull(hand_model, object_model, args):
     hand_model_type = type(hand_model).__name__
 
     if hand_model_type == 'HandModelDexHand021':
-        # dexhand021: 20 DOF. Finger forward is +X in the native frame.
+        # dexhand021: 12-DOF control space. Finger forward is +X in the native frame.
         if joint_angles_mu_dexhand021 is None:
             raise ImportError("dexhand021 default angles not found. Please check config/dexhand021_default_angles.py")
-        joint_angles_mu = torch.tensor([
-            np.deg2rad(70), 0.3, 0.3, 0.3,
-            0.0, 0.3, 0.3, 0.3,
-            0.0, 0.3, 0.3, 0.3,
-            0.0, 0.3, 0.3, 0.3,
-            0.0, 0.3, 0.3, 0.3
-        ], dtype=torch.float, device=device)
+        joint_angles_mu = joint_angles_mu_dexhand021.to(device=device, dtype=torch.float)
         # Predefined initialization orientations (randomly chosen per sample)
         rotation_hand_candidates = [
             torch.tensor(transforms3d.euler.euler2mat(np.pi / 2, 0, 0, axes='sxyz'), dtype=torch.float, device=device),

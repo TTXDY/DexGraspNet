@@ -264,6 +264,12 @@ rot_names = ['WRJRx', 'WRJRy', 'WRJRz']
 joint_names = hand_model.joints_names
 if len(joint_names) != hand_model.n_dofs:
     raise ValueError(f"Joint name count ({len(joint_names)}) does not match DOF ({hand_model.n_dofs}).")
+if args.hand_model_type == 'dexhand021':
+    joint_names_full = hand_model.joints_names_full
+    control_names = hand_model.joints_names
+else:
+    joint_names_full = joint_names
+    control_names = joint_names
 try:
     shutil.rmtree(os.path.join('../data/experiments', args.name, 'results'))
 except FileNotFoundError:
@@ -282,14 +288,26 @@ for i in range(len(args.object_code_list)):
         contact_point_indices = full_contact_indices[idx].detach().cpu().tolist() if full_contact_indices is not None else None
         hand_pose_cpu = full_hand_pose[idx].detach().cpu()
         hand_pose_raw = hand_pose_cpu.clone()
-        qpos = dict(zip(joint_names, hand_pose_cpu[9:].tolist()))
+        if args.hand_model_type == 'dexhand021':
+            joint_angles_full = hand_model.controls_to_joint_angles(hand_pose_cpu[9:]).squeeze(0).detach().cpu()
+            qpos = dict(zip(joint_names_full, joint_angles_full.tolist()))
+            controls = dict(zip(control_names, hand_pose_cpu[9:].tolist()))
+        else:
+            qpos = dict(zip(joint_names, hand_pose_cpu[9:].tolist()))
+            controls = None
         rot = robust_compute_rotation_matrix_from_ortho6d(hand_pose_cpu[3:9].unsqueeze(0))[0]
         translation = hand_pose_cpu[:3]
         euler = transforms3d.euler.mat2euler(rot, axes='sxyz')
         qpos.update(dict(zip(rot_names, euler)))
         qpos.update(dict(zip(translation_names, translation.tolist())))
         hand_pose_st_cpu = hand_pose_st[idx].detach().cpu()
-        qpos_st = dict(zip(joint_names, hand_pose_st_cpu[9:].tolist()))
+        if args.hand_model_type == 'dexhand021':
+            joint_angles_full_st = hand_model.controls_to_joint_angles(hand_pose_st_cpu[9:]).squeeze(0).detach().cpu()
+            qpos_st = dict(zip(joint_names_full, joint_angles_full_st.tolist()))
+            controls_st = dict(zip(control_names, hand_pose_st_cpu[9:].tolist()))
+        else:
+            qpos_st = dict(zip(joint_names, hand_pose_st_cpu[9:].tolist()))
+            controls_st = None
         rot = robust_compute_rotation_matrix_from_ortho6d(hand_pose_st_cpu[3:9].unsqueeze(0))[0]
         translation = hand_pose_st_cpu[:3]
         euler = transforms3d.euler.mat2euler(rot, axes='sxyz')
@@ -311,6 +329,8 @@ for i in range(len(args.object_code_list)):
             hand_pose_raw=hand_pose_raw.tolist(),
             qpos=qpos,
             qpos_st=qpos_st,
+            controls=controls,
+            controls_st=controls_st,
             contact_point_indices=contact_point_indices,
             energy=energy[idx].item(),
             E_fc=E_fc[idx].item(),
