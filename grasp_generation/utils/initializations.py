@@ -142,6 +142,9 @@ def initialize_convex_hull(hand_model, object_model, args):
             # Choice 1 (index 1): base z fixed to 0.3, base x > 0
             mask1 = choices == 1
             z = torch.where(mask1, torch.full_like(z, 0.3), z)
+            # Other choices: base z > 0
+            mask_other = ~mask1
+            z = torch.where(mask_other & (z <= 0), -z + eps, z)
             # Choice 2 (index 2): base x > 0, base y < 0
             mask2 = choices == 2
             y = torch.where(mask2 & (y >= 0), -y - 0.01, y)
