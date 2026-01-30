@@ -125,29 +125,45 @@ def initialize_convex_hull(hand_model, object_model, args):
             choices = torch.randint(0, len(rotation_hand_candidates), (batch_size_each,), device=device)
             rotation_hand = torch.stack([rotation_hand_candidates[c] for c in choices], dim=0)
             rotation[i * batch_size_each: (i + 1) * batch_size_each] = rotation_hand
-            # Apply base position constraints per rotation choice.
+            # Apply base position constraints per rotation choice using object bounds.
             sl = slice(i * batch_size_each, (i + 1) * batch_size_each)
             t = translation[sl]
-            eps = 1e-6
             x = t[:, 0]
             y = t[:, 1]
             z = t[:, 2]
-            # All choices: base x > 0
-            x = torch.where(x <= 0, -x + eps, x)
-            # Choice 1 (index 1): base z fixed to 0.3, base x > 0
+
+            x_len = float(obj_bounds[1][0] - obj_bounds[0][0])
+            y_len = float(obj_bounds[1][1] - obj_bounds[0][1])
+            z_len = float(obj_bounds[1][2] - obj_bounds[0][2])
+            x_len_t = torch.full_like(x, x_len)
+            y_len_t = torch.full_like(y, y_len)
+            z_len_t = torch.full_like(z, z_len)
+
+            jitter_x = (torch.rand_like(x) - 0.5) * x_len_t
+            jitter_y = (torch.rand_like(y) - 0.5) * y_len_t
+            jitter_z = (torch.rand_like(z) - 0.5) * z_len_t
+
+            mask0 = choices == 0
             mask1 = choices == 1
-            z = torch.where(mask1, torch.full_like(z, 0.3), z)
-            # Other choices: base z > 0
-            mask_other = ~mask1
-            z = torch.where(mask_other & (z <= 0), -z + eps, z)
-            # Choice 2 (index 2): base x > 0, base y < 0
             mask2 = choices == 2
-            y = torch.where(mask2 & (y >= 0), -y - 0.01, y)
-            # Choice 3 (index 3): base z > 0, base x/y near 0 with ~2cm jitter
             mask3 = choices == 3
-            jitter = 0.02 * (2.0 * torch.rand_like(x) - 1.0)
-            x = torch.where(mask3, jitter, x)
-            y = torch.where(mask3, jitter, y)
+
+            x = torch.where(mask0, 3.0 * x_len_t, x)
+            y = torch.where(mask0, jitter_y, y)
+            z = torch.where(mask0, jitter_z, z)
+
+            z = torch.where(mask1, 3.0 * z_len_t, z)
+            y = torch.where(mask1, jitter_y, y)
+            x = torch.where(mask1, jitter_x, x)
+
+            y = torch.where(mask2, -3.0 * y_len_t, y)
+            z = torch.where(mask2, jitter_z, z)
+            x = torch.where(mask2, jitter_x, x)
+
+            z = torch.where(mask3, 3.0 * z_len_t, z)
+            y = torch.where(mask3, jitter_y, y)
+            x = torch.where(mask3, jitter_x, x)
+
             t[:, 0] = x
             t[:, 1] = y
             t[:, 2] = z
