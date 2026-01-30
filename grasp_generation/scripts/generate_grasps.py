@@ -17,6 +17,7 @@ from tqdm import tqdm
 import math
 import random
 import transforms3d
+import json
 
 from utils.hand_model import HandModel
 from utils.hand_model_dexhand021 import HandModelDexHand021, get_dexhand021_output_alignment
@@ -46,6 +47,50 @@ def _parse_contact_links(text):
     s = s.replace('"', '').replace("'", '')
     tokens = [t.strip() for t in s.split(',') if t.strip()]
     return tokens or None
+
+
+def _load_contact_links_map(path):
+    try:
+        with open(path, "r") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
+
+
+def _resolve_contact_links(text, link_map):
+    if text is None:
+        return None, None
+    key = text.strip()
+    if key.lower() == "all":
+        return None, "all"
+    if key in link_map:
+        return link_map[key], key
+    tokens = _parse_contact_links(text)
+    if tokens and all(t in link_map for t in tokens):
+        expanded = []
+        for t in tokens:
+            expanded.extend(link_map[t])
+        return expanded, ",".join(tokens)
+    return tokens, "custom"
+
+
+def _expand_contact_link_runs(text, link_map):
+    if text is None:
+        return [(None, None)]
+    key = text.strip()
+    if key.lower() == "all":
+        if link_map:
+            return [(link_map[k], k) for k in link_map.keys()]
+        return [(None, "all")]
+    if key in link_map:
+        return [(link_map[key], key)]
+    tokens = _parse_contact_links(text)
+    if tokens and all(t in link_map for t in tokens):
+        if len(tokens) == 1:
+            t = tokens[0]
+            return [(link_map[t], t)]
+        return [(link_map[t], t) for t in tokens]
+    return [(tokens, "custom")]
 
 
 def _map_contact_token(token, hand_model_type):
@@ -102,147 +147,168 @@ def generate(args_list):
     object_model = ObjectModel(
         data_root_path=args.data_root_path,
         batch_size_each=args.batch_size_each,
-        num_samples=2000, 
+        num_samples=args.object_num_samples,
+        num_surface_samples=args.object_surface_samples,
         device=device
     )
     object_model.initialize(object_code_list)
 
-    initialize_convex_hull(hand_model, object_model, args)
+    contact_links_map = _load_contact_links_map(args.contact_links_file)
+    contact_runs = _expand_contact_link_runs(args.contact_links, contact_links_map)
 
-    contact_tokens = _parse_contact_links(args.contact_links)
-    if contact_tokens is not None:
-        link_indices = []
-        total_batch_size = len(object_code_list) * args.batch_size_each
-        for token in contact_tokens:
-            link_name = _map_contact_token(token, args.hand_model_type)
-            if link_name not in hand_model.link_name_to_link_index:
-                raise ValueError(f"Link '{link_name}' not found in hand model.")
-            link_idx = hand_model.link_name_to_link_index[link_name]
-            candidate_indices = (hand_model.global_index_to_link_index == link_idx).nonzero(as_tuple=False).squeeze(1)
-            if candidate_indices.numel() == 0:
-                raise ValueError(f"No contact candidates found for link '{link_name}'.")
-            link_indices.append(candidate_indices)
-        idx_per_token = []
-        for candidate_indices in link_indices:
-            rand_idx = torch.randint(0, candidate_indices.numel(), (total_batch_size,), device=device)
-            idx_per_token.append(candidate_indices[rand_idx])
-        contact_point_indices = torch.stack(idx_per_token, dim=1)
-        hand_model.set_parameters(hand_model.hand_pose, contact_point_indices)
-        hand_model.allowed_contact_indices_per_slot = link_indices
-    
-    hand_pose_st = hand_model.hand_pose.detach()
+    data_lists_by_object = {object_code: [] for object_code in object_code_list}
 
-    optim_config = {
-        'switch_possibility': args.switch_possibility,
-        'starting_temperature': args.starting_temperature,
-        'temperature_decay': args.temperature_decay,
-        'annealing_period': args.annealing_period,
-        'step_size': args.step_size,
-        'stepsize_period': args.stepsize_period,
-        'mu': args.mu,
-        'device': device
-    }
-    optimizer = Annealing(hand_model, **optim_config)
+    for contact_tokens, contact_links_id in contact_runs:
+        if contact_tokens is not None:
+            args.n_contact = len(contact_tokens)
 
-    # optimize
-    
-    weight_dict = dict(
-        w_dis=args.w_dis,
-        w_pen=args.w_pen,
-        w_spen=args.w_spen,
-        w_joints=args.w_joints,
-    )
-    energy, E_fc, E_dis, E_pen, E_spen, E_joints = cal_energy(hand_model, object_model, verbose=True, **weight_dict)
+        initialize_convex_hull(hand_model, object_model, args)
 
-    energy.sum().backward(retain_graph=True)
+        if contact_tokens is not None:
+            link_indices = []
+            total_batch_size = len(object_code_list) * args.batch_size_each
+            for token in contact_tokens:
+                link_name = _map_contact_token(token, args.hand_model_type)
+                if link_name not in hand_model.link_name_to_link_index:
+                    raise ValueError(f"Link '{link_name}' not found in hand model.")
+                link_idx = hand_model.link_name_to_link_index[link_name]
+                candidate_indices = (hand_model.global_index_to_link_index == link_idx).nonzero(as_tuple=False).squeeze(1)
+                if candidate_indices.numel() == 0:
+                    raise ValueError(f"No contact candidates found for link '{link_name}'.")
+                link_indices.append(candidate_indices)
+            idx_per_token = []
+            for candidate_indices in link_indices:
+                rand_idx = torch.randint(0, candidate_indices.numel(), (total_batch_size,), device=device)
+                idx_per_token.append(candidate_indices[rand_idx])
+            contact_point_indices = torch.stack(idx_per_token, dim=1)
+            hand_model.set_parameters(hand_model.hand_pose, contact_point_indices)
+            hand_model.allowed_contact_indices_per_slot = link_indices
+        else:
+            contact_links_id = contact_links_id or None
+            hand_model.allowed_contact_indices_per_slot = None
+        
+        hand_pose_st = hand_model.hand_pose.detach()
 
-    for step in range(1, args.n_iter + 1):
-        s = optimizer.try_step()
+        optim_config = {
+            'switch_possibility': args.switch_possibility,
+            'starting_temperature': args.starting_temperature,
+            'temperature_decay': args.temperature_decay,
+            'annealing_period': args.annealing_period,
+            'step_size': args.step_size,
+            'stepsize_period': args.stepsize_period,
+            'mu': args.mu,
+            'device': device
+        }
+        optimizer = Annealing(hand_model, **optim_config)
 
-        optimizer.zero_grad()
-        new_energy, new_E_fc, new_E_dis, new_E_pen, new_E_spen, new_E_joints = cal_energy(hand_model, object_model, verbose=True, **weight_dict)
+        # optimize
+        
+        weight_dict = dict(
+            w_dis=args.w_dis,
+            w_pen=args.w_pen,
+            w_spen=args.w_spen,
+            w_joints=args.w_joints,
+        )
+        energy, E_fc, E_dis, E_pen, E_spen, E_joints = cal_energy(hand_model, object_model, verbose=True, **weight_dict)
 
-        new_energy.sum().backward(retain_graph=True)
+        energy.sum().backward(retain_graph=True)
 
-        with torch.no_grad():
-            accept, t = optimizer.accept_step(energy, new_energy)
+        for step in range(1, args.n_iter + 1):
+            optimizer.try_step()
 
-            energy[accept] = new_energy[accept]
-            E_dis[accept] = new_E_dis[accept]
-            E_fc[accept] = new_E_fc[accept]
-            E_pen[accept] = new_E_pen[accept]
-            E_spen[accept] = new_E_spen[accept]
-            E_joints[accept] = new_E_joints[accept]
+            optimizer.zero_grad()
+            new_energy, new_E_fc, new_E_dis, new_E_pen, new_E_spen, new_E_joints = cal_energy(hand_model, object_model, verbose=True, **weight_dict)
+
+            new_energy.sum().backward(retain_graph=True)
+
+            with torch.no_grad():
+                accept, t = optimizer.accept_step(energy, new_energy)
+
+                energy[accept] = new_energy[accept]
+                E_dis[accept] = new_E_dis[accept]
+                E_fc[accept] = new_E_fc[accept]
+                E_pen[accept] = new_E_pen[accept]
+                E_spen[accept] = new_E_spen[accept]
+                E_joints[accept] = new_E_joints[accept]
 
 
-    # save results
-    translation_names = ['WRJTx', 'WRJTy', 'WRJTz']
-    rot_names = ['WRJRx', 'WRJRy', 'WRJRz']
-    if args.hand_model_type == 'dexhand021':
-        joint_names_full = hand_model.joints_names_full
-        control_names = hand_model.joints_names
-    else:
-        joint_names = [
-            'robot0:FFJ3', 'robot0:FFJ2', 'robot0:FFJ1', 'robot0:FFJ0',
-            'robot0:MFJ3', 'robot0:MFJ2', 'robot0:MFJ1', 'robot0:MFJ0',
-            'robot0:RFJ3', 'robot0:RFJ2', 'robot0:RFJ1', 'robot0:RFJ0',
-            'robot0:LFJ4', 'robot0:LFJ3', 'robot0:LFJ2', 'robot0:LFJ1', 'robot0:LFJ0',
-            'robot0:THJ4', 'robot0:THJ3', 'robot0:THJ2', 'robot0:THJ1', 'robot0:THJ0'
-        ]
-    for i, object_code in enumerate(object_code_list):
-        data_list = []
-        for j in range(args.batch_size_each):
-            idx = i * args.batch_size_each + j
-            scale = object_model.object_scale_tensor[i][j].item()
-            hand_pose = hand_model.hand_pose[idx].detach().cpu()
-            if args.hand_model_type == 'dexhand021':
-                joint_angles_full = hand_model.controls_to_joint_angles(hand_pose[9:]).squeeze(0).detach().cpu()
-                qpos = dict(zip(joint_names_full, joint_angles_full.tolist()))
-                controls = dict(zip(control_names, hand_pose[9:].tolist()))
-            else:
-                qpos = dict(zip(joint_names, hand_pose[9:].tolist()))
-                controls = None
-            rot = robust_compute_rotation_matrix_from_ortho6d(hand_pose[3:9].unsqueeze(0))[0]
-            if args.hand_model_type == 'dexhand021':
-                align = get_dexhand021_output_alignment(device=hand_pose.device)
-                rot = align @ rot
-                translation = align @ hand_pose[:3]
-            else:
-                translation = hand_pose[:3]
-            euler = transforms3d.euler.mat2euler(rot, axes='sxyz')
-            qpos.update(dict(zip(rot_names, euler)))
-            qpos.update(dict(zip(translation_names, translation.tolist())))
-            hand_pose = hand_pose_st[idx].detach().cpu()
-            if args.hand_model_type == 'dexhand021':
-                joint_angles_full_st = hand_model.controls_to_joint_angles(hand_pose[9:]).squeeze(0).detach().cpu()
-                qpos_st = dict(zip(joint_names_full, joint_angles_full_st.tolist()))
-                controls_st = dict(zip(control_names, hand_pose[9:].tolist()))
-            else:
-                qpos_st = dict(zip(joint_names, hand_pose[9:].tolist()))
-                controls_st = None
-            rot = robust_compute_rotation_matrix_from_ortho6d(hand_pose[3:9].unsqueeze(0))[0]
-            if args.hand_model_type == 'dexhand021':
-                align = get_dexhand021_output_alignment(device=hand_pose.device)
-                rot = align @ rot
-                translation = align @ hand_pose[:3]
-            else:
-                translation = hand_pose[:3]
-            euler = transforms3d.euler.mat2euler(rot, axes='sxyz')
-            qpos_st.update(dict(zip(rot_names, euler)))
-            qpos_st.update(dict(zip(translation_names, translation.tolist())))
-            data_list.append(dict(
-                scale=scale,
-                qpos=qpos,
-                qpos_st=qpos_st,
-                controls=controls,
-                controls_st=controls_st,
-                energy=energy[idx].item(),
-                E_fc=E_fc[idx].item(),
-                E_dis=E_dis[idx].item(),
-                E_pen=E_pen[idx].item(),
-                E_spen=E_spen[idx].item(),
-                E_joints=E_joints[idx].item(),
-            ))
+        # save results
+        translation_names = ['WRJTx', 'WRJTy', 'WRJTz']
+        rot_names = ['WRJRx', 'WRJRy', 'WRJRz']
+        if args.hand_model_type == 'dexhand021':
+            joint_names_full = hand_model.joints_names_full
+            control_names = hand_model.joints_names
+        else:
+            joint_names = [
+                'robot0:FFJ3', 'robot0:FFJ2', 'robot0:FFJ1', 'robot0:FFJ0',
+                'robot0:MFJ3', 'robot0:MFJ2', 'robot0:MFJ1', 'robot0:MFJ0',
+                'robot0:RFJ3', 'robot0:RFJ2', 'robot0:RFJ1', 'robot0:RFJ0',
+                'robot0:LFJ4', 'robot0:LFJ3', 'robot0:LFJ2', 'robot0:LFJ1', 'robot0:LFJ0',
+                'robot0:THJ4', 'robot0:THJ3', 'robot0:THJ2', 'robot0:THJ1', 'robot0:THJ0'
+            ]
+        full_contact_indices = hand_model.contact_point_indices.detach() if hand_model.contact_point_indices is not None else None
+        for i, object_code in enumerate(object_code_list):
+            for j in range(args.batch_size_each):
+                idx = i * args.batch_size_each + j
+                scale = object_model.object_scale_tensor[i][j].item()
+                contact_point_indices = full_contact_indices[idx].detach().cpu().tolist() if full_contact_indices is not None else None
+                hand_pose = hand_model.hand_pose[idx].detach().cpu()
+                if args.hand_model_type == 'dexhand021':
+                    joint_angles_full = hand_model.controls_to_joint_angles(hand_pose[9:]).squeeze(0).detach().cpu()
+                    qpos = dict(zip(joint_names_full, joint_angles_full.tolist()))
+                    controls = dict(zip(control_names, hand_pose[9:].tolist()))
+                else:
+                    qpos = dict(zip(joint_names, hand_pose[9:].tolist()))
+                    controls = None
+                rot = robust_compute_rotation_matrix_from_ortho6d(hand_pose[3:9].unsqueeze(0))[0]
+                if args.hand_model_type == 'dexhand021':
+                    align = get_dexhand021_output_alignment(device=hand_pose.device)
+                    rot = align @ rot
+                    translation = align @ hand_pose[:3]
+                else:
+                    translation = hand_pose[:3]
+                euler = transforms3d.euler.mat2euler(rot, axes='sxyz')
+                qpos.update(dict(zip(rot_names, euler)))
+                qpos.update(dict(zip(translation_names, translation.tolist())))
+                hand_pose_3_3_12 = None
+                if controls is not None:
+                    hand_pose_3_3_12 = translation.tolist() + list(euler) + [controls[name] for name in control_names]
+                hand_pose = hand_pose_st[idx].detach().cpu()
+                if args.hand_model_type == 'dexhand021':
+                    joint_angles_full_st = hand_model.controls_to_joint_angles(hand_pose[9:]).squeeze(0).detach().cpu()
+                    qpos_st = dict(zip(joint_names_full, joint_angles_full_st.tolist()))
+                    controls_st = dict(zip(control_names, hand_pose[9:].tolist()))
+                else:
+                    qpos_st = dict(zip(joint_names, hand_pose[9:].tolist()))
+                    controls_st = None
+                rot = robust_compute_rotation_matrix_from_ortho6d(hand_pose[3:9].unsqueeze(0))[0]
+                if args.hand_model_type == 'dexhand021':
+                    align = get_dexhand021_output_alignment(device=hand_pose.device)
+                    rot = align @ rot
+                    translation = align @ hand_pose[:3]
+                else:
+                    translation = hand_pose[:3]
+                euler = transforms3d.euler.mat2euler(rot, axes='sxyz')
+                qpos_st.update(dict(zip(rot_names, euler)))
+                qpos_st.update(dict(zip(translation_names, translation.tolist())))
+                data_lists_by_object[object_code].append(dict(
+                    scale=scale,
+                    qpos=qpos,
+                    qpos_st=qpos_st,
+                    hand_pose_3_3_12=hand_pose_3_3_12,
+                    controls=controls,
+                    controls_st=controls_st,
+                    contact_point_indices=contact_point_indices,
+                    contact_links_id=contact_links_id,
+                    contact_links_tokens=contact_tokens,
+                    energy=energy[idx].item(),
+                    E_fc=E_fc[idx].item(),
+                    E_dis=E_dis[idx].item(),
+                    E_pen=E_pen[idx].item(),
+                    E_spen=E_spen[idx].item(),
+                    E_joints=E_joints[idx].item(),
+                ))
+    for object_code, data_list in data_lists_by_object.items():
         np.save(os.path.join(args.result_path, object_code + '.npy'), data_list, allow_pickle=True)
 
 
@@ -263,6 +329,8 @@ if __name__ == '__main__':
     parser.add_argument('--n_iter', default=6000, type=int)
     parser.add_argument('--contact_links', default=None, type=str,
                         help='Override contact selection with link tokens, e.g. "[index3,middle3,thumb3]"')
+    parser.add_argument('--contact_links_file', default="../data/contact_link.json", type=str,
+                        help='JSON mapping of contact link presets (e.g., {"01": [...], "02": [...]})')
     # hyper parameters
     parser.add_argument('--switch_possibility', default=0.5, type=float)
     parser.add_argument('--mu', default=0.98, type=float)
@@ -285,6 +353,10 @@ if __name__ == '__main__':
     parser.add_argument('--thres_fc', default=0.3, type=float)
     parser.add_argument('--thres_dis', default=0.005, type=float)
     parser.add_argument('--thres_pen', default=0.001, type=float)
+    parser.add_argument('--object_num_samples', default=2000, type=int,
+                        help='Number of object volume points used for E_pen (higher = more accurate, slower).')
+    parser.add_argument('--object_surface_samples', default=0, type=int,
+                        help='Optional number of object surface points (0 = disabled).')
 
     args = parser.parse_args()
 
@@ -297,9 +369,7 @@ if __name__ == '__main__':
     torch.manual_seed(args.seed)
     random.seed(args.seed)
 
-    contact_tokens = _parse_contact_links(args.contact_links)
-    if contact_tokens is not None:
-        args.n_contact = len(contact_tokens)
+    contact_links_map = _load_contact_links_map(args.contact_links_file)
 
     if not os.path.exists(args.result_path):
         os.makedirs(args.result_path)

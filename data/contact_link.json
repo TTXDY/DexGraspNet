@@ -1,0 +1,7 @@
+{
+    "01": ["index3", "thumb3"],
+    "02": ["index3", "middle3", "thumb3"],
+    "03": ["index3", "ring3", "middle3", "thumb3"],
+    "04": ["index3", "ring3", "middle3", "pinky3", "thumb3"],
+    "05": ["index2", "ring2", "middle2", "pinky2", "thumb3"]
+}
