@@ -22,6 +22,7 @@ import torch
 import numpy as np
 import transforms3d
 import plotly.graph_objects as go
+import json
 
 from utils.hand_model import HandModel
 from utils.hand_model_dexhand021 import HandModelDexHand021
@@ -29,6 +30,16 @@ from utils.object_model import ObjectModel
 
 translation_names = ['WRJTx', 'WRJTy', 'WRJTz']
 rot_names = ['WRJRx', 'WRJRy', 'WRJRz']
+
+def _parse_contact_links(text):
+    if text is None:
+        return None
+    s = text.strip()
+    if s.startswith('[') and s.endswith(']'):
+        s = s[1:-1]
+    s = s.replace('"', '').replace("'", '')
+    tokens = [t.strip() for t in s.split(',') if t.strip()]
+    return tokens or None
 
 
 if __name__ == '__main__':
@@ -40,7 +51,13 @@ if __name__ == '__main__':
     parser.add_argument('--show_contact_points', action='store_true', help='Show contact points in red')
     parser.add_argument('--no_init', action='store_true', help='Hide initial pose (show only optimized pose)')
     parser.add_argument('--object_num_samples', type=int, default=2000,
-                        help='Number of object surface points used for E_pen debugging.')
+                        help='Number of object volume points used for E_pen debugging.')
+    parser.add_argument('--object_surface_samples', type=int, default=0,
+                        help='Optional number of object surface points (0 = disabled).')
+    parser.add_argument('--contact_links', default=None, type=str,
+                        help='Expected contact link preset id or tokens to verify against saved result.')
+    parser.add_argument('--contact_links_file', default='../data/contact_link.json', type=str,
+                        help='JSON mapping of contact link presets (e.g., {"01": [...], "02": [...]})')
     parser.add_argument('--show_collision_capsules', action='store_true',
                         help='Show collision capsules (DexHand021 only).')
     parser.add_argument('--show_penetrating_points', action='store_true',
@@ -61,8 +78,54 @@ if __name__ == '__main__':
     # Load results
     print("\n1. Loading results...")
     result_file = os.path.join(args.result_path, args.object_code + '.npy')
-    data_dict = np.load(result_file, allow_pickle=True)[args.num]
+    data_arr = np.load(result_file, allow_pickle=True)
+    data_idx = args.num
     print(f"   ✓ Results loaded")
+    # Optional contact link check
+    if args.contact_links is not None:
+        try:
+            with open(args.contact_links_file, "r") as f:
+                contact_links_map = json.load(f)
+        except FileNotFoundError:
+            contact_links_map = {}
+        requested = args.contact_links.strip()
+        if requested.lower() == "all":
+            expected_tokens = None
+            expected_id = "all"
+        elif requested in contact_links_map:
+            expected_tokens = contact_links_map[requested]
+            expected_id = requested
+        else:
+            expected_tokens = _parse_contact_links(requested)
+            expected_id = "custom"
+        # Remap args.num to the subset that matches the requested contact links.
+        if expected_id is None or expected_id == "all":
+            match_indices = list(range(len(data_arr)))
+        else:
+            match_indices = []
+            for i, d in enumerate(data_arr):
+                if d.get('contact_links_id', None) == expected_id:
+                    match_indices.append(i)
+                elif expected_id == "custom" and isinstance(expected_tokens, list):
+                    if d.get('contact_links_tokens', None) == expected_tokens:
+                        match_indices.append(i)
+        if not match_indices:
+            print(f"   ⚠ No results match contact_links={requested}; using global index {data_idx}.")
+        else:
+            if data_idx < 0 or data_idx >= len(match_indices):
+                raise ValueError(f"Requested num {data_idx} out of range for contact_links={requested} (0..{len(match_indices)-1}).")
+            mapped_idx = match_indices[data_idx]
+            print(f"   ✓ contact_links subset size: {len(match_indices)}; mapped index {data_idx} -> {mapped_idx}")
+            data_idx = mapped_idx
+        data_dict = data_arr[data_idx]
+        saved_id = data_dict.get('contact_links_id', None)
+        saved_tokens = data_dict.get('contact_links_tokens', None)
+        if saved_id != expected_id:
+            print(f"   ⚠ contact_links_id mismatch: saved={saved_id}, requested={expected_id}")
+        if isinstance(expected_tokens, list) and saved_tokens is not None and saved_tokens != expected_tokens:
+            print(f"   ⚠ contact_links_tokens mismatch: saved={saved_tokens}, requested={expected_tokens}")
+    else:
+        data_dict = data_arr[data_idx]
 
     # Load hand model
     print("\n2. Loading HandModel...")
@@ -182,6 +245,7 @@ if __name__ == '__main__':
         data_root_path='../data/meshdata',
         batch_size_each=1,
         num_samples=args.object_num_samples,
+        num_surface_samples=args.object_surface_samples,
         device=device
     )
     object_model.initialize(args.object_code)
