@@ -9,6 +9,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--src", type=str, required=True)
     parser.add_argument("--dst", type=str, required=True)
+    parser.add_argument("--require_watertight", action="store_true", default=True,
+                        help="Require watertight meshes (default: True).")
+    parser.add_argument("--no_require_watertight", action="store_false",
+                        dest="require_watertight",
+                        help="Allow non-watertight meshes.")
+    parser.add_argument("--min_volume", type=float, default=0.05,
+                        help="Minimum volume threshold (default: 0.05).")
     args = parser.parse_args()
 
     os.makedirs(args.dst, exist_ok=True)
@@ -25,5 +32,8 @@ if __name__ == "__main__":
         verts_ /= dmax
         mesh_ = trimesh.Trimesh(
             vertices=verts_, faces=mesh.faces, process=False)
-        if(mesh_.is_watertight and mesh_.volume > 0.05):
-            mesh_.export(os.path.join(args.dst, code))
+        if args.require_watertight and not mesh_.is_watertight:
+            continue
+        if mesh_.volume <= args.min_volume:
+            continue
+        mesh_.export(os.path.join(args.dst, code))
