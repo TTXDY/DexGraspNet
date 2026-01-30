@@ -50,6 +50,7 @@ def initialize_convex_hull(hand_model, object_model, args):
             torch.tensor(transforms3d.euler.euler2mat(np.pi / 2, 0, 0, axes='sxyz'), dtype=torch.float, device=device),
             torch.tensor(transforms3d.euler.euler2mat(0, 0, 0, axes='sxyz'), dtype=torch.float, device=device),
             torch.tensor(transforms3d.euler.euler2mat(np.pi / 2, 0, np.pi / 2, axes='sxyz'), dtype=torch.float, device=device),
+            torch.tensor(transforms3d.euler.euler2mat(0, 0, -np.pi / 2, axes='sxyz'), dtype=torch.float, device=device),
         ]
         approach_direction = torch.tensor([0, 0, 1], dtype=torch.float, device=device)
         # Adjust sampling ranges for the larger dexhand021 geometry
@@ -142,6 +143,11 @@ def initialize_convex_hull(hand_model, object_model, args):
             # Choice 2 (index 2): base x > 0, base y < 0
             mask2 = choices == 2
             y = torch.where(mask2 & (y >= 0), -y - 0.01, y)
+            # Choice 3 (index 3): base z > 0, base x/y near 0 with ~2cm jitter
+            mask3 = choices == 3
+            jitter = 0.02 * (2.0 * torch.rand_like(x) - 1.0)
+            x = torch.where(mask3, jitter, x)
+            y = torch.where(mask3, jitter, y)
             t[:, 0] = x
             t[:, 1] = y
             t[:, 2] = z

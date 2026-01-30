@@ -528,19 +528,16 @@ class HandModelDexHand021:
         p_pinky = self._link_origin_world_batch("r_f_link5_1_child")
         p_base = self._link_origin_world_batch("right_hand_base")
 
-        base_matrix = self.current_status["right_hand_base"].get_matrix()
-        if base_matrix.shape[0] == 1 and batch_size > 1:
-            base_matrix = base_matrix.expand(batch_size, 4, 4)
-        axes = base_matrix[:, :3, :3]
+        axes = self.global_rotation
         x_axis = axes[:, :, 0]
         y_axis = axes[:, :, 1]
         z_axis = axes[:, :, 2]
         # Fixed palm box size (meters)
-        width_len = torch.full((batch_size,), 0.10, dtype=self.global_translation.dtype, device=self.device)
-        length_len = torch.full((batch_size,), 0.15, dtype=self.global_translation.dtype, device=self.device)
+        width_len = torch.full((batch_size,), 0.15, dtype=self.global_translation.dtype, device=self.device)
+        length_len = torch.full((batch_size,), 0.10, dtype=self.global_translation.dtype, device=self.device)
         height = 0.02
         extents = torch.stack([width_len * 0.5, length_len * 0.5, torch.full_like(width_len, height * 0.5)], dim=1)
-        center = p_base + 0.5 * length_len.unsqueeze(1) * y_axis
+        center = p_base + 0.5 * width_len.unsqueeze(1) * x_axis
         return center, axes, extents
 
     def _build_collision_capsules_world(self):
