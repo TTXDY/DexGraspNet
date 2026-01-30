@@ -123,6 +123,37 @@ def _make_pose(tx, ty, tz):
     return pose
 
 
+def _hex_to_rgb(hex_color):
+    hex_color = hex_color.lstrip("#")
+    return tuple(int(hex_color[i:i + 2], 16) for i in (0, 2, 4))
+
+
+def _rgb_to_hex(rgb):
+    return "#{:02x}{:02x}{:02x}".format(*rgb)
+
+
+def _lerp(a, b, t):
+    return a + (b - a) * t
+
+
+def _interpolate_colorscale(colorscale, t):
+    t = float(max(0.0, min(1.0, t)))
+    for i in range(len(colorscale) - 1):
+        t0, c0 = colorscale[i]
+        t1, c1 = colorscale[i + 1]
+        if t0 <= t <= t1:
+            if t1 == t0:
+                return c1
+            u = (t - t0) / (t1 - t0)
+            r0, g0, b0 = _hex_to_rgb(c0)
+            r1, g1, b1 = _hex_to_rgb(c1)
+            r = int(round(_lerp(r0, r1, u)))
+            g = int(round(_lerp(g0, g1, u)))
+            b = int(round(_lerp(b0, b1, u)))
+            return _rgb_to_hex((r, g, b))
+    return colorscale[-1][1]
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--result_dir", type=str, default="../data/experiments/dexhand021_grasping/results")
@@ -139,7 +170,13 @@ def main():
     parser.add_argument("--output", type=str, default="dexhand_grid.html")
     parser.add_argument("--hand_opacity", type=float, default=1.0)
     parser.add_argument("--object_opacity", type=float, default=1.0)
+    parser.add_argument("--color_by_grasp", action="store_true", default=True,
+                        help="Color objects by grasp index (0..grasps-1). Enabled by default.")
+    parser.add_argument("--color_by_object", action="store_true",
+                        help="Color objects by object (override grasp colors).")
     args = parser.parse_args()
+    if args.color_by_object:
+        args.color_by_grasp = False
 
     objects = _parse_list(args.objects)
     if not objects:
@@ -164,6 +201,14 @@ def main():
         "#20b2aa",
         "#3aa0ff",
         "#7f8c8d",
+    ]
+
+    grasp_colorscale = [
+        [0.0, "#6dd47e"],
+        [0.25, "#f3c623"],
+        [0.5, "#ff9f43"],
+        [0.75, "#ff5a5a"],
+        [1.0, "#c84cff"],
     ]
 
     traces = []
@@ -234,8 +279,6 @@ def main():
                 data_arr = data_arr[match_indices]
 
         mesh = _load_object_mesh(args.mesh_root, object_code)
-        color = palette[obj_idx % len(palette)]
-
         for j in range(args.grasps):
             idx = args.start_index + j
             if idx >= len(data_arr):
@@ -253,6 +296,13 @@ def main():
                 i=0, opacity=args.hand_opacity, color="#b0b0b0", with_contact_points=False, pose=pose
             )
             traces.extend(hand_traces)
+
+            if args.color_by_grasp:
+                denom = max(args.grasps - 1, 1)
+                t_color = j / denom
+                color = _interpolate_colorscale(grasp_colorscale, t_color)
+            else:
+                color = palette[obj_idx % len(palette)]
 
             v = mesh.vertices * scale
             if pose is not None:
