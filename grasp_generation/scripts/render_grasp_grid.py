@@ -318,6 +318,7 @@ def main():
                     k=f[:, 2],
                     color=color,
                     opacity=args.object_opacity,
+                    flatshading=True,
                 )
             )
 
