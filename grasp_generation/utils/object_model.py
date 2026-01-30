@@ -18,7 +18,7 @@ from torchsdf import index_vertices_by_faces, compute_sdf
 
 class ObjectModel:
 
-    def __init__(self, data_root_path, batch_size_each, num_samples=2000, num_surface_samples=0, device="cuda"):
+    def __init__(self, data_root_path, batch_size_each, num_surface_samples=2000, device="cuda"):
         """
         Create a Object Model
         
@@ -28,8 +28,6 @@ class ObjectModel:
             directory to object meshes
         batch_size_each: int
             batch size for each objects
-        num_samples: int
-            numbers of object volume points (uniform inside mesh)
         num_surface_samples: int
             numbers of object surface points, sampled with fps (optional)
         device: str | torch.Device
@@ -39,7 +37,6 @@ class ObjectModel:
         self.device = device
         self.batch_size_each = batch_size_each
         self.data_root_path = data_root_path
-        self.num_samples = num_samples
         self.num_surface_samples = num_surface_samples
 
         self.object_code_list = None
@@ -69,29 +66,10 @@ class ObjectModel:
         self.surface_points_surface_tensor = []
         for object_code in object_code_list:
             self.object_scale_tensor.append(self.scale_choice[torch.randint(0, self.scale_choice.shape[0], (self.batch_size_each, ), device=self.device)])
-            self.object_mesh_list.append(tm.load(os.path.join(self.data_root_path, object_code, "coacd", "decomposed.obj"), force="mesh", process=False))
+            self.object_mesh_list.append(tm.load(os.path.join(self.data_root_path, object_code, "coacd", "decomposed.obj"), force="mesh", process=True))
             object_verts = torch.Tensor(self.object_mesh_list[-1].vertices).to(self.device)
             object_faces = torch.Tensor(self.object_mesh_list[-1].faces).long().to(self.device)
             self.object_face_verts_list.append(index_vertices_by_faces(object_verts, object_faces))
-            if self.num_samples != 0:
-                mesh_tm = self.object_mesh_list[-1]
-                try:
-                    if mesh_tm.is_watertight:
-                        volume_points = tm.sample.volume_mesh(mesh_tm, self.num_samples)
-                    else:
-                        warnings.warn(
-                            f"{object_code} is not watertight; falling back to surface sampling for volume points.",
-                            RuntimeWarning
-                        )
-                        volume_points, _ = tm.sample.sample_surface(mesh_tm, self.num_samples)
-                except Exception:
-                    warnings.warn(
-                        f"{object_code} volume sampling failed; falling back to surface sampling.",
-                        RuntimeWarning
-                    )
-                    volume_points, _ = tm.sample.sample_surface(mesh_tm, self.num_samples)
-                volume_points = torch.tensor(volume_points, dtype=torch.float, device=self.device)
-                self.surface_points_tensor.append(volume_points)
             if self.num_surface_samples != 0:
                 vertices = torch.tensor(self.object_mesh_list[-1].vertices, dtype=torch.float, device=self.device)
                 faces = torch.tensor(self.object_mesh_list[-1].faces, dtype=torch.float, device=self.device)
@@ -101,10 +79,10 @@ class ObjectModel:
                 surface_points.to(dtype=float, device=self.device)
                 self.surface_points_surface_tensor.append(surface_points)
         self.object_scale_tensor = torch.stack(self.object_scale_tensor, dim=0)
-        if self.num_samples != 0:
-            self.surface_points_tensor = torch.stack(self.surface_points_tensor, dim=0).repeat_interleave(self.batch_size_each, dim=0)  # (n_objects * batch_size_each, num_samples, 3)
         if self.num_surface_samples != 0:
             self.surface_points_surface_tensor = torch.stack(self.surface_points_surface_tensor, dim=0).repeat_interleave(self.batch_size_each, dim=0)
+            # Keep backward-compat names used by energy/visualization.
+            self.surface_points_tensor = self.surface_points_surface_tensor
 
     def cal_distance(self, x, with_closest_points=False):
         """

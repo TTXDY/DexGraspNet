@@ -32,6 +32,8 @@ def cal_energy(hand_model, object_model, w_dis=100.0, w_pen=100.0, w_spen=10.0, 
         torch.sum((hand_model.hand_pose[:, 9:] < hand_model.joints_lower) * (hand_model.joints_lower - hand_model.hand_pose[:, 9:]), dim=-1)
 
     # E_pen
+    if not hasattr(object_model, "surface_points_tensor") or object_model.surface_points_tensor is None or len(object_model.surface_points_tensor) == 0:
+        raise ValueError("object surface points not initialized; set --object_num_samples > 0.")
     object_scale = object_model.object_scale_tensor.flatten().unsqueeze(1).unsqueeze(2)
     object_surface_points = object_model.surface_points_tensor * object_scale  # (n_objects * batch_size_each, num_samples, 3)
     distances = hand_model.cal_distance(object_surface_points)

@@ -51,9 +51,7 @@ if __name__ == '__main__':
     parser.add_argument('--show_contact_points', action='store_true', help='Show contact points in red')
     parser.add_argument('--no_init', action='store_true', help='Hide initial pose (show only optimized pose)')
     parser.add_argument('--object_num_samples', type=int, default=2000,
-                        help='Number of object volume points used for E_pen debugging.')
-    parser.add_argument('--object_surface_samples', type=int, default=0,
-                        help='Optional number of object surface points (0 = disabled).')
+                        help='Number of object surface points used for E_pen debugging.')
     parser.add_argument('--contact_links', default=None, type=str,
                         help='Expected contact link preset id or tokens to verify against saved result.')
     parser.add_argument('--contact_links_file', default='../data/contact_link.json', type=str,
@@ -244,8 +242,7 @@ if __name__ == '__main__':
     object_model = ObjectModel(
         data_root_path='../data/meshdata',
         batch_size_each=1,
-        num_samples=args.object_num_samples,
-        num_surface_samples=args.object_surface_samples,
+        num_surface_samples=args.object_num_samples,
         device=device
     )
     object_model.initialize(args.object_code)

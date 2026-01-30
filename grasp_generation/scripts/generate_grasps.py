@@ -147,8 +147,7 @@ def generate(args_list):
     object_model = ObjectModel(
         data_root_path=args.data_root_path,
         batch_size_each=args.batch_size_each,
-        num_samples=args.object_num_samples,
-        num_surface_samples=args.object_surface_samples,
+        num_surface_samples=args.object_num_samples,
         device=device
     )
     object_model.initialize(object_code_list)
@@ -354,9 +353,7 @@ if __name__ == '__main__':
     parser.add_argument('--thres_dis', default=0.005, type=float)
     parser.add_argument('--thres_pen', default=0.001, type=float)
     parser.add_argument('--object_num_samples', default=2000, type=int,
-                        help='Number of object volume points used for E_pen (higher = more accurate, slower).')
-    parser.add_argument('--object_surface_samples', default=0, type=int,
-                        help='Optional number of object surface points (0 = disabled).')
+                        help='Number of object surface points used for E_pen (higher = more accurate, slower).')
 
     args = parser.parse_args()
 

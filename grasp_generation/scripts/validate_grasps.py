@@ -147,7 +147,7 @@ if __name__ == '__main__':
         object_model = ObjectModel(
             data_root_path=args.mesh_path,
             batch_size_each=batch_size,
-            num_samples=0,
+            num_surface_samples=0,
             device=device
         )
         object_model.initialize(args.object_code)
