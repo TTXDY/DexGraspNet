@@ -154,6 +154,11 @@ if __name__ == '__main__':
     if 'hand_pose_raw' in data_dict:
         hand_pose = torch.tensor(data_dict['hand_pose_raw'], dtype=torch.float, device=device)
         print("   ✓ Using saved hand_pose_raw for exact pose")
+        try:
+            _final_t = hand_pose[:3].detach().cpu().tolist()
+            print(f"   - Hand final translation (hand_pose_raw): {_final_t}")
+        except Exception:
+            pass
     else:
         qpos = data_dict['qpos']
         rot = np.array(transforms3d.euler.euler2mat(*[qpos[name] for name in rot_names]))
@@ -230,6 +235,11 @@ if __name__ == '__main__':
         else:
             hand_pose_st = torch.tensor([qpos_st[name] for name in translation_names] + rot + [qpos_st[name] for name in joint_names], dtype=torch.float, device=device)
         print(f"   ✓ Initial pose loaded")
+        try:
+            _init_t = [qpos_st[name] for name in translation_names]
+            print(f"   - Hand initial translation (qpos_st): {_init_t}")
+        except Exception:
+            pass
     else:
         hand_pose_st = None
         if args.no_init:
@@ -253,6 +263,20 @@ if __name__ == '__main__':
     print(f"   - Object scale: {data_dict['scale']:.4f}")
     if 'object_surface_points' in data_dict:
         print("   ✓ Using saved object surface points from results")
+        try:
+            import numpy as _np
+            _pts = _np.asarray(data_dict['object_surface_points'], dtype=_np.float32)
+            if _pts.size > 0:
+                _obj_center = _pts.mean(axis=0)
+                print(f"   - Object center (from surface points): {_obj_center.tolist()}")
+                _mins = _pts.min(axis=0)
+                _maxs = _pts.max(axis=0)
+                _lens = (_maxs - _mins).tolist()
+                print(f"   - Object xyz lengths (from surface points): {_lens}")
+        except Exception:
+            pass
+    if 'init_choice_index' in data_dict:
+        print(f"   - Init choice index: {data_dict['init_choice_index']}")
 
     # Create visualization
     print("\n4. Creating visualization...")
