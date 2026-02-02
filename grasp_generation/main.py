@@ -347,11 +347,16 @@ for contact_tokens, contact_links_id in _expand_contact_link_runs(args.contact_l
 
     full_hand_pose = hand_model.hand_pose.detach()
     full_contact_indices = hand_model.contact_point_indices.detach() if hand_model.contact_point_indices is not None else None
+    init_choice_indices = getattr(hand_model, "init_choice_indices", None)
+    if init_choice_indices is not None:
+        init_choice_indices = init_choice_indices.detach().cpu().tolist()
     for i in range(len(args.object_code_list)):
         for j in range(args.batch_size):
             idx = i * args.batch_size + j
             scale = object_model.object_scale_tensor[i][j].item()
-            surface_points = (object_model.surface_points_tensor[idx] * scale).detach().cpu().tolist()
+            surface_points = (object_model.surface_points_tensor[idx] * scale).detach().cpu().numpy()
+            center_offset = surface_points.mean(axis=0)
+            surface_points = (surface_points - center_offset).tolist()
             contact_point_indices = full_contact_indices[idx].detach().cpu().tolist() if full_contact_indices is not None else None
             hand_pose_cpu = full_hand_pose[idx].detach().cpu()
             hand_pose_raw = hand_pose_cpu.clone()
@@ -363,7 +368,7 @@ for contact_tokens, contact_links_id in _expand_contact_link_runs(args.contact_l
                 qpos = dict(zip(joint_names, hand_pose_cpu[9:].tolist()))
                 controls = None
             rot = robust_compute_rotation_matrix_from_ortho6d(hand_pose_cpu[3:9].unsqueeze(0))[0]
-            translation = hand_pose_cpu[:3]
+            translation = hand_pose_cpu[:3] - torch.tensor(center_offset, dtype=hand_pose_cpu.dtype)
             euler = transforms3d.euler.mat2euler(rot, axes='sxyz')
             qpos.update(dict(zip(rot_names, euler)))
             qpos.update(dict(zip(translation_names, translation.tolist())))
@@ -379,13 +384,14 @@ for contact_tokens, contact_links_id in _expand_contact_link_runs(args.contact_l
                 qpos_st = dict(zip(joint_names, hand_pose_st_cpu[9:].tolist()))
                 controls_st = None
             rot = robust_compute_rotation_matrix_from_ortho6d(hand_pose_st_cpu[3:9].unsqueeze(0))[0]
-            translation = hand_pose_st_cpu[:3]
+            translation = hand_pose_st_cpu[:3] - torch.tensor(center_offset, dtype=hand_pose_st_cpu.dtype)
             euler = transforms3d.euler.mat2euler(rot, axes='sxyz')
             qpos_st.update(dict(zip(rot_names, euler)))
             qpos_st.update(dict(zip(translation_names, translation.tolist())))
             # Recompute E_pen using saved surface points for consistency.
             with torch.no_grad():
                 surf = torch.tensor(surface_points, dtype=torch.float, device=device).unsqueeze(0)
+                hand_pose_raw[:3] -= torch.tensor(center_offset, dtype=hand_pose_raw.dtype)
                 hand_pose_raw_device = hand_pose_raw.to(device)
                 hand_model.set_parameters(hand_pose_raw_device.unsqueeze(0))
                 E_pen_recomputed = float(hand_model.cal_distance(surf).clamp_min(0).sum().item())
@@ -405,6 +411,7 @@ for contact_tokens, contact_links_id in _expand_contact_link_runs(args.contact_l
                 contact_point_indices=contact_point_indices,
                 contact_links_id=contact_links_id,
                 contact_links_tokens=contact_tokens,
+                init_choice_index=init_choice_indices[idx] if init_choice_indices is not None else None,
                 energy=energy[idx].item(),
                 E_fc=E_fc[idx].item(),
                 E_dis=E_dis[idx].item(),
