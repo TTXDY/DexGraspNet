@@ -123,6 +123,7 @@ def initialize_convex_hull(hand_model, object_model, args):
         # Use hand-specific rotation_hand (defined above based on hand model type)
         if hand_model_type == 'HandModelDexHand021':
             choices = torch.randint(0, len(rotation_hand_candidates), (batch_size_each,), device=device)
+            hand_model.init_choice_indices = choices.detach().clone()
             rotation_hand = torch.stack([rotation_hand_candidates[c] for c in choices], dim=0)
             rotation[i * batch_size_each: (i + 1) * batch_size_each] = rotation_hand
             # Apply base position constraints per rotation choice using object bounds.
@@ -139,7 +140,7 @@ def initialize_convex_hull(hand_model, object_model, args):
             y_len_t = torch.full_like(y, y_len)
             z_len_t = torch.full_like(z, z_len)
 
-            jitter_x = (torch.rand_like(x) - 0.5) * x_len_t
+            jitter_x = (torch.rand_like(x) * 2.0 - 1.0) * x_len_t - 0.15
             jitter_y = (torch.rand_like(y) - 0.5) * y_len_t
             jitter_z = (torch.rand_like(z) - 0.5) * z_len_t
 
@@ -148,8 +149,8 @@ def initialize_convex_hull(hand_model, object_model, args):
             mask2 = choices == 2
             mask3 = choices == 3
 
-            x = torch.where(mask0, 3.0 * x_len_t, x)
-            y = torch.where(mask0, jitter_y, y)
+            y = torch.where(mask0, -3.0 * y_len_t, y)
+            x = torch.where(mask0, jitter_x, x)
             z = torch.where(mask0, jitter_z, z)
 
             z = torch.where(mask1, 3.0 * z_len_t, z)
@@ -157,8 +158,8 @@ def initialize_convex_hull(hand_model, object_model, args):
             x = torch.where(mask1, jitter_x, x)
 
             y = torch.where(mask2, -3.0 * y_len_t, y)
+            x = torch.where(mask2, 3.0 * x_len_t, x)
             z = torch.where(mask2, jitter_z, z)
-            x = torch.where(mask2, jitter_x, x)
 
             z = torch.where(mask3, 3.0 * z_len_t, z)
             y = torch.where(mask3, jitter_y, y)
