@@ -47,10 +47,9 @@ def initialize_convex_hull(hand_model, object_model, args):
         joint_angles_mu = joint_angles_mu_dexhand021.to(device=device, dtype=torch.float)
         # Predefined initialization orientations (randomly chosen per sample)
         rotation_hand_candidates = [
-            torch.tensor(transforms3d.euler.euler2mat(np.pi / 2, 0, 0, axes='sxyz'), dtype=torch.float, device=device),
-            torch.tensor(transforms3d.euler.euler2mat(0, 0, 0, axes='sxyz'), dtype=torch.float, device=device),
+            torch.tensor(transforms3d.euler.euler2mat(np.pi / 2, 0, np.pi, axes='sxyz'), dtype=torch.float, device=device),
+            torch.tensor(transforms3d.euler.euler2mat(0, 0, np.pi, axes='sxyz'), dtype=torch.float, device=device),
             torch.tensor(transforms3d.euler.euler2mat(np.pi / 2, 0, np.pi / 2, axes='sxyz'), dtype=torch.float, device=device),
-            torch.tensor(transforms3d.euler.euler2mat(0, 0, -np.pi / 2, axes='sxyz'), dtype=torch.float, device=device),
         ]
         approach_direction = torch.tensor([0, 0, 1], dtype=torch.float, device=device)
         # Adjust sampling ranges for the larger dexhand021 geometry
@@ -72,6 +71,8 @@ def initialize_convex_hull(hand_model, object_model, args):
 
     translation = torch.zeros([total_batch_size, 3], dtype=torch.float, device=device)
     rotation = torch.zeros([total_batch_size, 3, 3], dtype=torch.float, device=device)
+    if hand_model_type == 'HandModelDexHand021':
+        hand_model.init_choice_indices = torch.zeros(total_batch_size, dtype=torch.long, device=device)
 
     for i in range(n_objects):
         
@@ -122,12 +123,12 @@ def initialize_convex_hull(hand_model, object_model, args):
         translation[i * batch_size_each: (i + 1) * batch_size_each] = p - distance.unsqueeze(1) * (rotation_global @ rotation_local @ approach_direction.reshape(1, -1, 1)).squeeze(2)
         # Use hand-specific rotation_hand (defined above based on hand model type)
         if hand_model_type == 'HandModelDexHand021':
+            sl = slice(i * batch_size_each, (i + 1) * batch_size_each)
             choices = torch.randint(0, len(rotation_hand_candidates), (batch_size_each,), device=device)
-            hand_model.init_choice_indices = choices.detach().clone()
+            hand_model.init_choice_indices[sl] = choices
             rotation_hand = torch.stack([rotation_hand_candidates[c] for c in choices], dim=0)
             rotation[i * batch_size_each: (i + 1) * batch_size_each] = rotation_hand
             # Apply base position constraints per rotation choice using object bounds.
-            sl = slice(i * batch_size_each, (i + 1) * batch_size_each)
             t = translation[sl]
             x = t[:, 0]
             y = t[:, 1]
@@ -140,16 +141,15 @@ def initialize_convex_hull(hand_model, object_model, args):
             y_len_t = torch.full_like(y, y_len)
             z_len_t = torch.full_like(z, z_len)
 
-            jitter_x = (torch.rand_like(x) * 2.0 - 1.0) * x_len_t - 0.15
+            jitter_x = (torch.rand_like(x) * 2.0 - 1.0) * x_len_t + 0.15
             jitter_y = (torch.rand_like(y) - 0.5) * y_len_t
             jitter_z = (torch.rand_like(z) - 0.5) * z_len_t
 
             mask0 = choices == 0
             mask1 = choices == 1
             mask2 = choices == 2
-            mask3 = choices == 3
 
-            y = torch.where(mask0, -3.0 * y_len_t, y)
+            y = torch.where(mask0, 3.0 * y_len_t, y)
             x = torch.where(mask0, jitter_x, x)
             z = torch.where(mask0, jitter_z, z)
 
@@ -160,10 +160,6 @@ def initialize_convex_hull(hand_model, object_model, args):
             y = torch.where(mask2, -3.0 * y_len_t, y)
             x = torch.where(mask2, 3.0 * x_len_t, x)
             z = torch.where(mask2, jitter_z, z)
-
-            z = torch.where(mask3, 3.0 * z_len_t, z)
-            y = torch.where(mask3, jitter_y, y)
-            x = torch.where(mask3, jitter_x, x)
 
             t[:, 0] = x
             t[:, 1] = y
