@@ -39,7 +39,9 @@ python main.py \
     --batch_size 24 \
     --n_iter 5000 \
     --gpu "0" \
-    --contact_links "all" \
+    --n_contact 4 \
     --object_num_samples 2000 \
     --w_dis 100 \
-    --w_pen 200
+    --w_pen 200 \
+    --random_hand \
+    --random_obj_scale
