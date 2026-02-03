@@ -41,13 +41,38 @@ if __name__ == "__main__":
         if mesh.vertices is None or len(mesh.vertices) == 0:
             continue
         verts = np.array(mesh.vertices, dtype=np.float32)
-        extents = verts.max(axis=0) - verts.min(axis=0)
-        scale = np.ones(3, dtype=np.float32)
-        for i in range(3):
-            if extents[i] > 0:
-                scale[i] = target[i] / extents[i]
 
-        center = (verts.max(axis=0) + verts.min(axis=0)) / 2.0
-        verts_scaled = (verts - center) * scale + center
+        stem_lower = stem.lower()
+        if "sphere" in stem_lower:
+            max_norm = np.max(np.linalg.norm(verts, axis=1))
+            if max_norm <= 0:
+                continue
+            scale = (target[0] * 0.5) / max_norm
+            verts_scaled = verts * scale
+        elif "cylinder" in stem_lower:
+            xy = np.sqrt(verts[:, 0] ** 2 + verts[:, 1] ** 2)
+            max_r = np.max(xy)
+            z_min, z_max = verts[:, 2].min(), verts[:, 2].max()
+            height = z_max - z_min
+            if max_r <= 0 or height <= 0:
+                continue
+            scale_r = (target[0] * 0.5) / max_r
+            scale_z = target[2] / height
+            verts_scaled = verts.copy()
+            verts_scaled[:, 0] *= scale_r
+            verts_scaled[:, 1] *= scale_r
+            verts_scaled[:, 2] *= scale_z
+        elif "cube" in stem_lower or "cuboid" in stem_lower:
+            center = verts.mean(axis=0)
+            v0 = verts - center
+            half = np.max(np.abs(v0), axis=0)
+            if np.any(half <= 0):
+                continue
+            scale = (target * 0.5) / half
+            verts_scaled = v0 * scale + center
+        else:
+            # Fallback: no scaling for unknown types
+            verts_scaled = verts
+
         mesh_scaled = trimesh.Trimesh(vertices=verts_scaled, faces=mesh.faces, process=False)
         mesh_scaled.export(os.path.join(args.dst, fname))
