@@ -52,7 +52,7 @@ if __name__ == '__main__':
         )
         # dexhand021 default control angles (12 DOF)
         joint_angles = torch.tensor([
-            np.deg2rad(70), 0.3, 0.3, 0.15,  # Thumb spread/MCP/DIP, finger spread
+            np.deg2rad(80), 0, 0.1, 0.1,  # Thumb spread/MCP/DIP, finger spread
             0.3, 0.3,                        # Index MCP/DIP
             0.3, 0.3,                        # Middle MCP/DIP
             0.3, 0.3,                        # Ring MCP/DIP

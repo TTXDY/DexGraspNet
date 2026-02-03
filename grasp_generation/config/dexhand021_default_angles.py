@@ -29,10 +29,10 @@ import numpy as np
 
 # Strategy: use moderate flexion for pre-bending in control space.
 joint_angles_mu_dexhand021 = torch.tensor([
-    np.deg2rad(70),  # ctrl_thumb_spread
-    0.3,            # ctrl_thumb_mcp
-    0.3,            # ctrl_thumb_dip
-    0.15,           # ctrl_finger_spread
+    np.deg2rad(80),  # ctrl_thumb_spread
+    0.0,            # ctrl_thumb_mcp
+    0.1,            # ctrl_thumb_dip
+    0.1,            # ctrl_finger_spread
     0.3,            # ctrl_index_mcp
     0.3,            # ctrl_index_dip
     0.3,            # ctrl_middle_mcp
