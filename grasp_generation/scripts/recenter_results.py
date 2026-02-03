@@ -80,7 +80,9 @@ def main():
         new_dict = dict(data_dict)
         new_dict["object_surface_points"] = (np.asarray(data_dict["object_surface_points"], dtype=np.float32) - center).tolist()
         new_dict["hand_pose_raw"] = _shift_hand_pose_raw(data_dict.get("hand_pose_raw"), center)
-        new_dict["hand_pose_3_3_12"] = _shift_hand_pose_3_3_12(data_dict.get("hand_pose_3_3_12"), center)
+        new_dict["intrinsic_euler_hand_pose_3_3_12"] = _shift_hand_pose_3_3_12(
+            data_dict.get("intrinsic_euler_hand_pose_3_3_12"), center
+        )
         new_dict["qpos"] = _shift_qpos(data_dict.get("qpos"), center)
         new_dict["qpos_st"] = _shift_qpos(data_dict.get("qpos_st"), center)
 

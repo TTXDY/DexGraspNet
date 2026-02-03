@@ -372,9 +372,10 @@ for contact_tokens, contact_links_id in _expand_contact_link_runs(args.contact_l
             euler = transforms3d.euler.mat2euler(rot, axes='sxyz')
             qpos.update(dict(zip(rot_names, euler)))
             qpos.update(dict(zip(translation_names, translation.tolist())))
-            hand_pose_3_3_12 = None
+            intrinsic_euler_hand_pose_3_3_12 = None
             if controls is not None:
-                hand_pose_3_3_12 = translation.tolist() + list(euler) + [controls[name] for name in control_names]
+                euler_intr = transforms3d.euler.mat2euler(rot, axes='rxyz')
+                intrinsic_euler_hand_pose_3_3_12 = translation.tolist() + list(euler_intr) + [controls[name] for name in control_names]
             hand_pose_st_cpu = hand_pose_st[idx].detach().cpu()
             if args.hand_model_type == 'dexhand021':
                 joint_angles_full_st = hand_model.controls_to_joint_angles(hand_pose_st_cpu[9:]).squeeze(0).detach().cpu()
@@ -403,7 +404,7 @@ for contact_tokens, contact_links_id in _expand_contact_link_runs(args.contact_l
                 scale=scale,
                 object_surface_points=surface_points,
                 hand_pose_raw=hand_pose_raw.tolist(),
-                hand_pose_3_3_12=hand_pose_3_3_12,
+                intrinsic_euler_hand_pose_3_3_12=intrinsic_euler_hand_pose_3_3_12,
                 qpos=qpos,
                 qpos_st=qpos_st,
                 controls=controls,
