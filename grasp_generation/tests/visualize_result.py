@@ -73,6 +73,9 @@ if __name__ == '__main__':
     print(f"Grasp index: {args.num}")
     print(f"Result path: {args.result_path}")
 
+    # Visualization-only global offset (object + hand)
+    vis_offset = torch.tensor([0.0, 0.0, 0.0], dtype=torch.float, device=device)
+
     # Load results
     print("\n1. Loading results...")
     result_file = os.path.join(args.result_path, args.object_code + '.npy')
@@ -155,6 +158,24 @@ if __name__ == '__main__':
         hand_pose = torch.tensor(data_dict['hand_pose_raw'], dtype=torch.float, device=device)
         print("   ✓ Using saved hand_pose_raw for exact pose")
         try:
+            _final_t_raw = hand_pose[:3].detach().cpu().tolist()
+            _final_rot6d = hand_pose[3:9].detach().cpu().tolist()
+            print(f"   - Hand final translation (hand_pose_raw): {_final_t_raw}")
+            print(f"   - Hand final rotation (rot6d): {_final_rot6d}")
+            if 'intrinsic_euler_hand_pose_3_3_12' in data_dict and data_dict['intrinsic_euler_hand_pose_3_3_12'] is not None:
+                _hp = data_dict['intrinsic_euler_hand_pose_3_3_12']
+                if len(_hp) >= 6:
+                    _final_euler = _hp[3:6]
+                    print(f"   - Hand final rotation (intrinsic euler xyz): {_final_euler}")
+        except Exception:
+            pass
+        hand_pose[:3] += vis_offset
+        try:
+            _final_t = hand_pose[:3].detach().cpu().tolist()
+            print(f"   - Hand final translation (hand_pose_raw, offset): {_final_t}")
+        except Exception:
+            pass
+        try:
             _final_t = hand_pose[:3].detach().cpu().tolist()
             print(f"   - Hand final translation (hand_pose_raw): {_final_t}")
         except Exception:
@@ -194,8 +215,10 @@ if __name__ == '__main__':
                     get('r_f_joint5_3'),
                 ]
             hand_pose = torch.tensor([qpos[name] for name in translation_names] + rot + controls, dtype=torch.float, device=device)
+            hand_pose[:3] += vis_offset
         else:
             hand_pose = torch.tensor([qpos[name] for name in translation_names] + rot + [qpos[name] for name in joint_names], dtype=torch.float, device=device)
+            hand_pose[:3] += vis_offset
 
     if 'qpos_st' in data_dict and not args.no_init:
         qpos_st = data_dict['qpos_st']
@@ -232,12 +255,16 @@ if __name__ == '__main__':
                     get('r_f_joint5_3'),
                 ]
             hand_pose_st = torch.tensor([qpos_st[name] for name in translation_names] + rot + controls, dtype=torch.float, device=device)
+            hand_pose_st[:3] += vis_offset
         else:
             hand_pose_st = torch.tensor([qpos_st[name] for name in translation_names] + rot + [qpos_st[name] for name in joint_names], dtype=torch.float, device=device)
+            hand_pose_st[:3] += vis_offset
         print(f"   ✓ Initial pose loaded")
         try:
             _init_t = [qpos_st[name] for name in translation_names]
+            _init_rot = [qpos_st[name] for name in rot_names]
             print(f"   - Hand initial translation (qpos_st): {_init_t}")
+            print(f"   - Hand initial rotation (euler xyz): {_init_rot}")
         except Exception:
             pass
     else:
@@ -265,7 +292,7 @@ if __name__ == '__main__':
         print("   ✓ Using saved object surface points from results")
         try:
             import numpy as _np
-            _pts = _np.asarray(data_dict['object_surface_points'], dtype=_np.float32)
+            _pts = _np.asarray(data_dict['object_surface_points'], dtype=_np.float32) + vis_offset.detach().cpu().numpy()
             if _pts.size > 0:
                 _obj_center = _pts.mean(axis=0)
                 print(f"   - Object center (from surface points): {_obj_center.tolist()}")
@@ -372,12 +399,14 @@ if __name__ == '__main__':
             )
 
     # Object
-    object_plotly = object_model.get_plotly_data(i=0, color='lightgreen', opacity=0.7)
+    _pose = np.eye(4, dtype=np.float32)
+    _pose[:3, 3] = vis_offset.detach().cpu().numpy()
+    object_plotly = object_model.get_plotly_data(i=0, color='lightgreen', opacity=0.7, pose=_pose)
 
     def _get_object_surface_points():
         if 'object_surface_points' in data_dict:
             pts = torch.tensor(data_dict['object_surface_points'], dtype=torch.float, device=device)
-            return pts.unsqueeze(0)
+            return (pts + vis_offset).unsqueeze(0)
         object_scale = object_model.object_scale_tensor.flatten().unsqueeze(1).unsqueeze(2)
         return object_model.surface_points_tensor * object_scale
 
