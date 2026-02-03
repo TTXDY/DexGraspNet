@@ -4,9 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-DexGraspNet is a grasp generation system that synthesizes dexterous hand grasps for 3D objects using optimization-based methods. This repository uses the **Shadow Hand** robot model and performs physics-based grasp optimization through simulated annealing.
+DexGraspNet is a grasp generation system that synthesizes dexterous hand grasps for 3D objects using optimization-based methods. This repository uses **Shadow Hand** and **DexHand021** robot models and performs physics-based grasp optimization through simulated annealing.
 
-**Key Difference from MANO branch**: This repository uses Shadow Hand (robotic hand with MJCF/URDF) instead of MANO (parametric human hand model).
+**Key Difference from MANO branch**: This repository uses robotic hands (MJCF/URDF) instead of MANO (parametric human hand model).
 
 ## Quick Start Guide
 
@@ -106,6 +106,16 @@ python normalize.py --src ../data/manifolds --dst ../data/normalized_models
 python decompose_list.py --src ../data/normalized_models --dst ../data/meshdata --coacd_path ./CoACD/build/main
 bash run.sh  # or: python poolrun.py -p 32 for parallel processing
 ```
+
+**Optional: Real-scale meshes**
+
+The normalization step rescales objects to a canonical size. If you have real-world target sizes, scale normalized meshes with:
+
+```bash
+python scale_from_json.py --src ../data/normalized_models --dst ../data/real_scale_models --size_json path/to/object_real_size.json
+```
+
+`object_real_size.json` should contain per-object bounding-box sizes in meters (xyz extents).
 
 **Option B: Extract from ShapeNet datasets**
 
@@ -517,4 +527,3 @@ Contact points are selected from pre-defined candidates (contact_points.json):
 - Shadow Hand: pytorch_kinematics, urdf_parser_py
 
 **Key Insight**: Both branches can use Python 3.8 + PyTorch 2.1.0 without needing Isaac Gym for grasp generation.
-

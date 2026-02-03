@@ -1,6 +1,6 @@
 # Grasp Generation
 
-This folder is for generating grasps. We improve and accelerate [Differentiable Force Closure Estimator](https://arxiv.org/abs/2104.09194) to generate grasps. Then they are loaded into [Isaac Gym]((https://developer.nvidia.com/isaac-gym)) for validation. Asset processing is needed before grasp generation. 
+This folder is for generating grasps. We improve and accelerate [Differentiable Force Closure Estimator](https://arxiv.org/abs/2104.09194) to generate grasps. Then they are loaded into [Isaac Gym](https://developer.nvidia.com/isaac-gym) for validation. Asset processing is needed before grasp generation.
 
 ## Dependencies
 
@@ -75,7 +75,7 @@ graspdata
 ...
 ```
 
-We also provide `main.py` for experimental use. This script is identical to `generate_grasps.py`, but logs energy curves and outputs to `data/experiments/<name>`. Use `tensorboard --logdir=data/experiments/<name>` to visualize the energy curves. 
+We also provide `main.py` for experimental use. This script is identical to `generate_grasps.py`, but logs energy curves and outputs to `data/experiments/<name>`. Use `tensorboard --logdir=data/experiments/<name>` to visualize the energy curves.
 
 Run `python tests/visualize_result.py` to visualize grasps.
 
@@ -91,15 +91,21 @@ Or you can run valiadtion on several GPUs. Again, use `export CUDA_VISIBLE_DEVIC
 
 ## Data Format
 
-Each `source(-category)-code0.npy` contains a `list` of data dicts. Each dict represents one synthesized grasp: 
+Each `source(-category)-code0.npy` contains a `list` of data dicts. Each dict represents one synthesized grasp:
 
-* `scale`: The scale of the object. 
-* `qpos`: The final grasp pose $g=(T,R,\theta)$, which is logged as a dict: 
-  * `WRJTx,WRJTy,WRJTz`: Translations in meters. 
-  * `WRJRx,WRJRy,WRJRz`: Rotations in euler angles, following the xyz convention. 
-  * `robot0:XXJn`: Articulations passed to the forward kinematics system. 
-* `qpos_st`: The initial grasp pose logged like `qpos`. This entry will be removed after grasp validation. 
-* `energy,E_fc,E_dis,E_pen,E_spen,E_joints`: Final energy terms. These entries will be removed after grasp validation. 
+* `scale`: Object scale factor (1.0 if `--random_scale` is not used).
+* `object_surface_points`: Surface points used for E_pen. These are centered to the object surface mean.
+* `hand_pose_raw`: Final hand pose `[tx,ty,tz, rot6d(6), controls(12)]` (DexHand021).
+* `intrinsic_euler_hand_pose_3_3_12`: Final hand pose `[tx,ty,tz, euler_intrinsic_xyz(3), controls(12)]` (DexHand021).
+* `qpos`: Final grasp pose `g=(T,R,theta)` as a dict:
+  * `WRJTx,WRJTy,WRJTz`: Translations in meters (centered to object surface mean).
+  * `WRJRx,WRJRy,WRJRz`: Rotations in euler angles (xyz convention).
+  * `r_f_joint*`: Full joint angles (DexHand021).
+* `qpos_st`: Initial grasp pose logged like `qpos` (centered).
+* `controls, controls_st`: DexHand021 control-space values for final/initial pose.
+* `contact_point_indices`: Indices of sampled contact candidates.
+* `contact_links_id, contact_links_tokens`: Contact preset id and resolved tokens.
+* `init_choice_index`: Initialization rotation choice index (DexHand021).
+* `energy,E_fc,E_dis,E_pen,E_pen_recomputed,E_spen,E_joints`: Energy terms.
 
 Refer to `tests/visualize_result.py` for more information. 
-

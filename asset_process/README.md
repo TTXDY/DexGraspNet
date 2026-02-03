@@ -52,7 +52,7 @@ We process our object models as the following pipeline. If you have some object 
 
 - Extraction: Organize models into a folder.
 - Manifold: Use ManifoldPlus to convert raw models into manifolds robustly.
-- Normalization: Adjust centers and sizes of models. Then filter out bad models.
+- Normalization: Adjust centers and sizes of models to a normalized scale. Then filter out bad models.
 - Decomposition: Use CoACD to decompose models and export urdf files for later physical simulation.
 
 Below are sources of our object datasets:
@@ -123,3 +123,13 @@ meshdata
 +-- source(-category)-code1
 ...
 ```
+
+## Real-Scale (Optional)
+
+The normalization step rescales objects to a canonical size. If you want real-world dimensions, use:
+
+```bash
+python scale_from_json.py --src data/normalized_models --dst data/real_scale_models --size_json path/to/object_real_size.json
+```
+
+`object_real_size.json` should contain per-object bounding-box sizes in meters (xyz extents). The output meshes keep the same topology but are scaled to the target sizes.
