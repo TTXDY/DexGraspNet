@@ -79,8 +79,10 @@ parser.add_argument('--thres_dis', default=0.005, type=float)
 parser.add_argument('--thres_pen', default=0.001, type=float)
 parser.add_argument('--object_num_samples', default=2000, type=int,
                     help='Number of object surface points used for E_pen (higher = more accurate, slower).')
-parser.add_argument('--random_scale', action='store_true',
+parser.add_argument('--random_obj_scale', action='store_true',
                     help='Enable random object scaling (default: off).')
+parser.add_argument('--random_hand', action='store_true',
+                    help='Use randomized dexhand021 initialization (shadowhand-like) when set.')
 
 args = parser.parse_args()
 if args.hand_model_type == 'dexhand021' and '--w_dis' not in sys.argv:
@@ -188,7 +190,7 @@ object_model = ObjectModel(
     device=device
 )
 object_model.initialize(args.object_code_list)
-if not args.random_scale:
+if not args.random_obj_scale:
     object_model.object_scale_tensor = torch.ones_like(object_model.object_scale_tensor)
 
 print('n_contact_candidates', hand_model.n_contact_candidates)
@@ -197,6 +199,8 @@ print('total batch size', total_batch_size)
 contact_links_map = _load_contact_links_map(args.contact_links_file)
 
 def _expand_contact_link_runs(text, link_map):
+    if args.hand_model_type == 'dexhand021' and args.random_hand:
+        return [(None, None)]
     if text is None:
         return [(None, None)]
     key = text.strip()

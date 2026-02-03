@@ -124,47 +124,76 @@ def initialize_convex_hull(hand_model, object_model, args):
         # Use hand-specific rotation_hand (defined above based on hand model type)
         if hand_model_type == 'HandModelDexHand021':
             sl = slice(i * batch_size_each, (i + 1) * batch_size_each)
-            choices = torch.randint(0, len(rotation_hand_candidates), (batch_size_each,), device=device)
-            hand_model.init_choice_indices[sl] = choices
-            rotation_hand = torch.stack([rotation_hand_candidates[c] for c in choices], dim=0)
-            rotation[i * batch_size_each: (i + 1) * batch_size_each] = rotation_hand
-            # Apply base position constraints per rotation choice using object bounds.
-            t = translation[sl]
-            x = t[:, 0]
-            y = t[:, 1]
-            z = t[:, 2]
+            if args.random_hand:
+                # Randomized init: shadowhand-style alignment to surface normals.
+                process_theta = 2 * math.pi * torch.rand([batch_size_each], dtype=torch.float, device=device)
+                rotate_theta = 2 * math.pi * torch.rand([batch_size_each], dtype=torch.float, device=device)
+                rotation_local = torch.zeros([batch_size_each, 3, 3], dtype=torch.float, device=device)
+                rotation_global = torch.zeros([batch_size_each, 3, 3], dtype=torch.float, device=device)
+                for j in range(batch_size_each):
+                    rotation_local[j] = torch.tensor(
+                        transforms3d.euler.euler2mat(process_theta[j], deviate_theta[j], rotate_theta[j], axes='rzxz'),
+                        dtype=torch.float,
+                        device=device
+                    )
+                    rotation_global[j] = torch.tensor(
+                        transforms3d.euler.euler2mat(math.atan2(n[j, 1], n[j, 0]) - math.pi / 2,
+                                                     -math.acos(n[j, 2]), 0, axes='rzxz'),
+                        dtype=torch.float,
+                        device=device
+                    )
+                rotation_hand = torch.tensor(
+                    transforms3d.euler.euler2mat(np.pi, np.deg2rad(-30), np.pi / 2, axes='sxyz'),
+                    dtype=torch.float,
+                    device=device
+                ).unsqueeze(0).expand(batch_size_each, 3, 3)
+                rotation_hand = torch.bmm(torch.bmm(rotation_global, rotation_local), rotation_hand)
+                rotation[i * batch_size_each: (i + 1) * batch_size_each] = rotation_hand
+                translation[sl] = p - distance.unsqueeze(1) * (rotation_global @ rotation_local @ approach_direction.reshape(1, -1, 1)).squeeze(2)
+                hand_model.init_choice_indices[sl] = -1
+            else:
+                choices = torch.randint(0, len(rotation_hand_candidates), (batch_size_each,), device=device)
+                hand_model.init_choice_indices[sl] = choices
+                rotation_hand = torch.stack([rotation_hand_candidates[c] for c in choices], dim=0)
+                rotation[i * batch_size_each: (i + 1) * batch_size_each] = rotation_hand
+            if not args.random_hand:
+                # Apply base position constraints per rotation choice using object bounds.
+                t = translation[sl]
+                x = t[:, 0]
+                y = t[:, 1]
+                z = t[:, 2]
 
-            x_len = float(obj_bounds[1][0] - obj_bounds[0][0])
-            y_len = float(obj_bounds[1][1] - obj_bounds[0][1])
-            z_len = float(obj_bounds[1][2] - obj_bounds[0][2])
-            x_len_t = torch.full_like(x, x_len)
-            y_len_t = torch.full_like(y, y_len)
-            z_len_t = torch.full_like(z, z_len)
+                x_len = float(obj_bounds[1][0] - obj_bounds[0][0])
+                y_len = float(obj_bounds[1][1] - obj_bounds[0][1])
+                z_len = float(obj_bounds[1][2] - obj_bounds[0][2])
+                x_len_t = torch.full_like(x, x_len)
+                y_len_t = torch.full_like(y, y_len)
+                z_len_t = torch.full_like(z, z_len)
 
-            jitter_x = (torch.rand_like(x) * 2.0 - 1.0) * x_len_t + 0.15
-            jitter_y = (torch.rand_like(y) - 0.5) * y_len_t
-            jitter_z = (torch.rand_like(z) - 0.5) * z_len_t
+                jitter_x = (torch.rand_like(x) * 2.0 - 1.0) * x_len_t + 0.15
+                jitter_y = (torch.rand_like(y) - 0.5) * y_len_t
+                jitter_z = (torch.rand_like(z) - 0.5) * z_len_t
 
-            mask0 = choices == 0
-            mask1 = choices == 1
-            mask2 = choices == 2
+                mask0 = choices == 0
+                mask1 = choices == 1
+                mask2 = choices == 2
 
-            y = torch.where(mask0, 3.0 * y_len_t, y)
-            x = torch.where(mask0, jitter_x, x)
-            z = torch.where(mask0, jitter_z, z)
+                y = torch.where(mask0, 3.0 * y_len_t, y)
+                x = torch.where(mask0, jitter_x, x)
+                z = torch.where(mask0, jitter_z, z)
 
-            z = torch.where(mask1, 3.0 * z_len_t, z)
-            y = torch.where(mask1, jitter_y, y)
-            x = torch.where(mask1, jitter_x, x)
+                z = torch.where(mask1, 3.0 * z_len_t, z)
+                y = torch.where(mask1, jitter_y, y)
+                x = torch.where(mask1, jitter_x, x)
 
-            y = torch.where(mask2, -3.0 * y_len_t, y)
-            x = torch.where(mask2, 3.0 * x_len_t, x)
-            z = torch.where(mask2, jitter_z, z)
+                y = torch.where(mask2, -3.0 * y_len_t, y)
+                x = torch.where(mask2, 3.0 * x_len_t, x)
+                z = torch.where(mask2, jitter_z, z)
 
-            t[:, 0] = x
-            t[:, 1] = y
-            t[:, 2] = z
-            translation[sl] = t
+                t[:, 0] = x
+                t[:, 1] = y
+                t[:, 2] = z
+                translation[sl] = t
         else:
             rotation[i * batch_size_each: (i + 1) * batch_size_each] = rotation_global @ rotation_local @ rotation_hand
     

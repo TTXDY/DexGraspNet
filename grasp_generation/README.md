@@ -64,7 +64,11 @@ Then, run:
 python scripts/generate_grasps.py --all
 ```
 
-Adjust parameters `batch_size_each` to get the desired amount of data. Turn down `max_total_batch_size` if CUDA runs out of memory. Remember to change the random seed `seed` to get different results. Other numeric parameters are magical and we don't recommend tuning them. 
+Adjust parameters `batch_size_each` to get the desired amount of data. Turn down `max_total_batch_size` if CUDA runs out of memory. Remember to change the random seed `seed` to get different results. Other numeric parameters are magical and we don't recommend tuning them.
+
+Useful flags:
+* `--random_hand`: use randomized initialization (shadowhand-style normal alignment) for DexHand021.
+* `--random_obj_scale`: enable random object scaling.
 
 The output folder will have the following structure: 
 
@@ -93,7 +97,7 @@ Or you can run valiadtion on several GPUs. Again, use `export CUDA_VISIBLE_DEVIC
 
 Each `source(-category)-code0.npy` contains a `list` of data dicts. Each dict represents one synthesized grasp:
 
-* `scale`: Object scale factor (1.0 if `--random_scale` is not used).
+* `scale`: Object scale factor (1.0 if `--random_obj_scale` is not used).
 * `object_surface_points`: Surface points used for E_pen. These are centered to the object surface mean.
 * `hand_pose_raw`: Final hand pose `[tx,ty,tz, rot6d(6), controls(12)]` (DexHand021).
 * `intrinsic_euler_hand_pose_3_3_12`: Final hand pose `[tx,ty,tz, euler_intrinsic_xyz(3), controls(12)]` (DexHand021).

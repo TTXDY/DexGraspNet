@@ -73,11 +73,12 @@ if __name__ == '__main__':
         print(f'Visualizing Shadow Hand ({hand_model.n_dofs} DOF)')
 
     if args.hand_model_type == 'dexhand021':
-        # rotation = torch.tensor(transforms3d.euler.euler2mat(np.pi, np.deg2rad(-30), np.pi / 2, axes='sxyz'), dtype=torch.float, device=device)
+        rotation = torch.tensor(transforms3d.euler.euler2mat(np.pi, np.deg2rad(-30), np.pi / 2, axes='sxyz'), dtype=torch.float, device=device)
         # rotation = torch.tensor(transforms3d.euler.euler2mat(np.pi / 2, 0, np.pi / 2, axes='sxyz'), dtype=torch.float, device=device)
-        rotation = torch.tensor(transforms3d.euler.euler2mat(0, 0, -np.pi / 2, axes='sxyz'), dtype=torch.float, device=device)
+        # rotation = torch.tensor(transforms3d.euler.euler2mat(0, 0, -np.pi / 2, axes='sxyz'), dtype=torch.float, device=device)
 
     else:
+        # rotation = torch.tensor(transforms3d.euler.euler2mat(0, 0, 0, axes='rzxz'), dtype=torch.float, device=device)
         rotation = torch.tensor(transforms3d.euler.euler2mat(0, -np.pi / 3, 0, axes='rzxz'), dtype=torch.float, device=device)
     hand_pose = torch.cat([torch.tensor([0, 0, 0], dtype=torch.float, device=device), rotation.T.ravel()[:6], joint_angles])
     hand_model.set_parameters(hand_pose.unsqueeze(0))
