@@ -41,6 +41,10 @@ def _parse_list(text):
         return json.loads(s)
     return [t.strip() for t in s.split(",") if t.strip()]
 
+def _load_todo(path):
+    with open(path, "r") as f:
+        return [line.strip() for line in f if line.strip()]
+
 
 def _parse_contact_links(text):
     if text is None:
@@ -157,14 +161,17 @@ def _interpolate_colorscale(colorscale, t):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--result_dir", type=str, default="../data/experiments/dexhand021_grasping/results")
-    parser.add_argument("--objects", type=str, required=True, help="Comma list or JSON list of object codes")
+    parser.add_argument("--objects", type=str, help="Comma list or JSON list of object codes")
+    parser.add_argument("--todo", type=str, help="Path to todo.txt (one object code per line)")
     parser.add_argument("--grasps", type=int, default=6, help="Number of grasps per object")
     parser.add_argument("--start_index", type=int, default=0, help="Start index within each npy")
     parser.add_argument("--contact_links", default=None, type=str,
                         help="Expected contact link preset id or tokens to filter results.")
     parser.add_argument("--contact_links_file", default="../data/contact_link.json", type=str,
                         help="JSON mapping of contact link presets (e.g., {\"01\": [...], \"02\": [...]})")
-    parser.add_argument("--mesh_root", type=str, default="../data/meshdata")
+    parser.add_argument("--mesh_root", type=str, default=None)
+    parser.add_argument("--data_root_path", type=str, default="../data/meshdata",
+                        help="Alias for --mesh_root (kept for consistency with other scripts).")
     parser.add_argument("--col_stride", type=float, default=0.35, help="Grid spacing along X")
     parser.add_argument("--row_stride", type=float, default=0.35, help="Grid spacing along Y")
     parser.add_argument("--output", type=str, default="dexhand_grid.html")
@@ -178,9 +185,25 @@ def main():
     if args.color_by_object:
         args.color_by_grasp = False
 
-    objects = _parse_list(args.objects)
+    if args.todo:
+        if args.objects:
+            raise ValueError("when using --todo, do not set --objects")
+        objects = _load_todo(args.todo)
+    else:
+        objects = _parse_list(args.objects)
     if not objects:
-        raise ValueError("--objects is required and cannot be empty")
+        if not os.path.isdir(args.result_dir):
+            raise ValueError("Provide --objects/--todo, or ensure --result_dir exists to auto-scan results")
+        objects = sorted(
+            os.path.splitext(f)[0]
+            for f in os.listdir(args.result_dir)
+            if f.endswith(".npy")
+        )
+    if not objects:
+        raise ValueError("No objects found. Provide --objects/--todo or ensure result_dir has .npy files")
+
+    if args.mesh_root is None:
+        args.mesh_root = args.data_root_path
 
     device = "cpu"
     hand_model = HandModelDexHand021(
@@ -212,11 +235,15 @@ def main():
     ]
 
     traces = []
+    missing_results = []
+    empty_results = []
+    render_idx = 0
 
     for obj_idx, object_code in enumerate(objects):
         result_path = os.path.join(args.result_dir, object_code + ".npy")
         if not os.path.exists(result_path):
-            raise FileNotFoundError(f"Result file not found: {result_path}")
+            missing_results.append(object_code)
+            continue
         data_arr = np.load(result_path, allow_pickle=True)
 
         if args.contact_links is not None:
@@ -278,6 +305,10 @@ def main():
             else:
                 data_arr = data_arr[match_indices]
 
+        if len(data_arr) == 0:
+            empty_results.append(object_code)
+            continue
+
         mesh = _load_object_mesh(args.mesh_root, object_code)
         for j in range(args.grasps):
             idx = args.start_index + j
@@ -287,7 +318,7 @@ def main():
             scale = float(data_dict["scale"])
 
             tx = j * args.col_stride
-            ty = -obj_idx * args.row_stride
+            ty = -render_idx * args.row_stride
             pose = _make_pose(tx, ty, 0.0)
 
             hand_pose = _build_hand_pose(data_dict, device)
@@ -321,6 +352,7 @@ def main():
                     flatshading=True,
                 )
             )
+        render_idx += 1
 
     fig = go.Figure(data=traces)
     fig.update_layout(
@@ -336,6 +368,12 @@ def main():
         plot_bgcolor="#2b2b2b",
     )
     fig.write_html(args.output)
+    if missing_results:
+        print(f"Warning: {len(missing_results)} objects missing results; skipped.")
+        print("  Examples:", ", ".join(missing_results[:10]))
+    if empty_results:
+        print(f"Warning: {len(empty_results)} objects with empty results; skipped.")
+        print("  Examples:", ", ".join(empty_results[:10]))
     print(f"Saved: {args.output}")
 
 
