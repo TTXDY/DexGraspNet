@@ -151,9 +151,14 @@ def generate(args_list):
         device=device
     )
     object_model.initialize(object_code_list)
+    if not args.random_obj_scale:
+        object_model.object_scale_tensor = torch.ones_like(object_model.object_scale_tensor)
 
     contact_links_map = _load_contact_links_map(args.contact_links_file)
-    contact_runs = _expand_contact_link_runs(args.contact_links, contact_links_map)
+    if args.hand_model_type == 'dexhand021' and args.random_hand:
+        contact_runs = [(None, None)]
+    else:
+        contact_runs = _expand_contact_link_runs(args.contact_links, contact_links_map)
 
     data_lists_by_object = {object_code: [] for object_code in object_code_list}
 
@@ -270,8 +275,11 @@ def generate(args_list):
                 qpos.update(dict(zip(rot_names, euler)))
                 qpos.update(dict(zip(translation_names, translation.tolist())))
                 hand_pose_3_3_12 = None
+                intrinsic_euler_hand_pose_3_3_12 = None
                 if controls is not None:
                     hand_pose_3_3_12 = translation.tolist() + list(euler) + [controls[name] for name in control_names]
+                    euler_intr = transforms3d.euler.mat2euler(rot, axes='rxyz')
+                    intrinsic_euler_hand_pose_3_3_12 = translation.tolist() + list(euler_intr) + [controls[name] for name in control_names]
                 hand_pose = hand_pose_st[idx].detach().cpu()
                 if args.hand_model_type == 'dexhand021':
                     joint_angles_full_st = hand_model.controls_to_joint_angles(hand_pose[9:]).squeeze(0).detach().cpu()
@@ -295,6 +303,7 @@ def generate(args_list):
                     qpos=qpos,
                     qpos_st=qpos_st,
                     hand_pose_3_3_12=hand_pose_3_3_12,
+                    intrinsic_euler_hand_pose_3_3_12=intrinsic_euler_hand_pose_3_3_12,
                     controls=controls,
                     controls_st=controls_st,
                     contact_point_indices=contact_point_indices,
@@ -348,12 +357,19 @@ if __name__ == '__main__':
     parser.add_argument('--distance_upper', default=0.3, type=float)
     parser.add_argument('--theta_lower', default=-math.pi / 6, type=float)
     parser.add_argument('--theta_upper', default=math.pi / 6, type=float)
+    # dexhand021-specific init scaling (keeps ShadowHand defaults unchanged)
+    parser.add_argument('--dexhand_distance_scale', default=1.3, type=float)
+    parser.add_argument('--dexhand_theta_scale', default=0.7, type=float)
     # energy thresholds
     parser.add_argument('--thres_fc', default=0.3, type=float)
     parser.add_argument('--thres_dis', default=0.005, type=float)
     parser.add_argument('--thres_pen', default=0.001, type=float)
     parser.add_argument('--object_num_samples', default=2000, type=int,
                         help='Number of object surface points used for E_pen (higher = more accurate, slower).')
+    parser.add_argument('--random_obj_scale', action='store_true',
+                        help='Enable random object scaling (default: off).')
+    parser.add_argument('--random_hand', action='store_true',
+                        help='Use randomized dexhand021 initialization (shadowhand-like) when set.')
 
     args = parser.parse_args()
 
@@ -374,8 +390,12 @@ if __name__ == '__main__':
     if not os.path.exists(args.data_root_path):
         raise ValueError(f'data_root_path {args.data_root_path} doesn\'t exist')
     
-    if (args.object_code_list is not None) + args.all != 1:
-        raise ValueError('exactly one among \'object_code_list\' \'all\' should be specified')
+    if args.todo:
+        if args.object_code_list is not None or args.all:
+            raise ValueError("when using --todo, do not set --object_code_list or --all")
+    else:
+        if (args.object_code_list is not None) + args.all != 1:
+            raise ValueError('exactly one among \'object_code_list\' \'all\' should be specified')
     
     if args.todo:
         with open("todo.txt", "r") as f:
@@ -390,6 +410,20 @@ if __name__ == '__main__':
             raise ValueError('object_code_list isn\'t a subset of dirs in data_root_path')
     else:
         object_code_list = object_code_list_all
+
+    # Filter out objects missing required mesh files.
+    valid_object_codes = []
+    missing_mesh = []
+    for object_code in object_code_list:
+        mesh_path = os.path.join(args.data_root_path, object_code, "coacd", "decomposed.obj")
+        if os.path.isfile(mesh_path):
+            valid_object_codes.append(object_code)
+        else:
+            missing_mesh.append(object_code)
+    if missing_mesh:
+        print(f"Warning: {len(missing_mesh)} objects missing coacd/decomposed.obj; skipping.")
+        print("  Examples:", ", ".join(missing_mesh[:10]))
+    object_code_list = valid_object_codes
     
     if not args.overwrite:
         for object_code in object_code_list.copy():
