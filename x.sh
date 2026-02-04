@@ -45,3 +45,100 @@ python main.py \
     --w_pen 200 \
     --random_hand \
     --random_obj_scale
+
+CUDA_VISIBLE_DEVICES=0 python scripts/generate_grasps.py \
+    --all \
+    --hand_model_type dexhand021 \
+    --data_root_path ../data/meshdata \
+    --result_path ../data/experiments/dexhand021_grasping \
+    --batch_size_each 24 \
+    --n_iter 5000 \
+    --n_contact 4 \
+    --object_num_samples 2000 \
+    --w_dis 100 \
+    --w_pen 300 \
+    --random_hand \
+    --random_obj_scale
+
+ python visualize_result.py \
+    --data_root_path ../data/meshdata_local \
+    --hand_model_type dexhand021 \
+    --object_code cylinder1 \
+    --result_path ../data/experiments/dexhand021_rl/results \
+    --show_contact_points  \
+    --num 9
+
+ python visualize_result.py \
+    --data_root_path ../data/meshdata_local \
+    --hand_model_type dexhand021 \
+    --object_code cylinder1 \
+    --result_path ../data/experiments/dexhand021_grasping \
+    --show_contact_points  \
+    --num 9
+
+python main.py \
+    --data_root_path ../data/meshdata_local \
+    --hand_model_type dexhand021 \
+    --object_code_list "['cylinder1']" \
+    --name dexhand021_rl \
+    --batch_size 24 \
+    --n_iter 3000 \
+    --gpu "0" \
+    --contact_links "01,02,03,04" \
+    --object_num_samples 2000 \
+    --w_dis 100 \
+    --w_pen 300
+
+
+
+ CUDA_VISIBLE_DEVICES=0 python scripts/generate_grasps.py \
+    --object_code_list cylinder1 cylinder2 \
+    --hand_model_type dexhand021 \
+    --data_root_path ../data/meshdata_local \
+    --result_path ../data/experiments/dexhand021_grasping \
+    --batch_size_each 32 \
+    --n_iter 3000 \
+    --n_contact 4 \
+    --object_num_samples 1000 \
+    --w_dis 100 \
+    --w_pen 300 \
+    --random_hand \
+    --random_obj_scale \
+    --overwrite
+
+
+ CUDA_VISIBLE_DEVICES=0 python scripts/generate_grasps.py \
+    --object_code_list core-02773838-4a1f62dbe8b091eabc49cae1a831a9e core-04074963-c99bbef1b2c514a81b22d29e47ec3f2 \
+    --hand_model_type dexhand021 \
+    --data_root_path ../data/meshdata \
+    --result_path ../data/experiments/dexhand021_grasping \
+    --batch_size_each 32 \
+    --n_iter 3000 \
+    --n_contact 4 \
+    --object_num_samples 1000 \
+    --w_dis 100 \
+    --w_pen 300 \
+    --random_hand \
+    --random_obj_scale \
+    --overwrite
+
+ CUDA_VISIBLE_DEVICES=0 python scripts/generate_grasps.py \
+    --todo \
+    --hand_model_type dexhand021 \
+    --data_root_path ../data/meshdata \
+    --result_path ../data/experiments/dexhand021_randoms \
+    --batch_size_each 32 \
+    --n_iter 3000 \
+    --n_contact 4 \
+    --object_num_samples 2000 \
+    --w_dis 100 \
+    --w_pen 300 \
+    --random_hand \
+    --random_obj_scale
+
+
+ python scripts/render_grasp_grid.py \
+      --result_dir ../data/experiments/dexhand021_grasping \
+      --objects "core-02773838-4a1f62dbe8b091eabc49cae1a831a9e, core-04074963-c99bbef1b2c514a81b22d29e47ec3f2" \
+      --grasps 24 \
+      --output dexhand_random1.html
