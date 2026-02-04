@@ -48,6 +48,8 @@ if __name__ == '__main__':
     parser.add_argument('--object_code', type=str, default='sem-Xbox360-d0dff348985d4f8e65ca1b579a4b8d2')
     parser.add_argument('--num', type=int, default=0, help='Grasp index (0=best)')
     parser.add_argument('--result_path', type=str, default='../data/dataset')
+    parser.add_argument('--data_root_path', type=str, default='../data/meshdata',
+                        help='Directory to object meshes (e.g., ../data/meshdata or ../data/meshdata_local).')
     parser.add_argument('--show_contact_points', action='store_true', help='Show contact points in red')
     parser.add_argument('--no_init', action='store_true', help='Hide initial pose (show only optimized pose)')
     parser.add_argument('--object_num_samples', type=int, default=2000,
@@ -277,7 +279,7 @@ if __name__ == '__main__':
     # Load object model
     print("\n3. Loading ObjectModel...")
     object_model = ObjectModel(
-        data_root_path='../data/meshdata',
+        data_root_path=args.data_root_path,
         batch_size_each=1,
         num_surface_samples=args.object_num_samples,
         device=device

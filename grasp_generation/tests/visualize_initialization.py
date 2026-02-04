@@ -32,6 +32,8 @@ if __name__ == '__main__':
     parser.add_argument('--theta_lower', default=0, type=float)
     parser.add_argument('--theta_upper', default=0, type=float)
     parser.add_argument('--jitter_strength', default=0., type=float)
+    parser.add_argument('--data_root_path', default='../data/meshdata', type=str,
+                        help='Directory to object meshes (e.g., ../data/meshdata or ../data/meshdata_local).')
     args = parser.parse_args()
 
     torch.manual_seed(1)
@@ -50,7 +52,7 @@ if __name__ == '__main__':
     # object model
 
     object_model = ObjectModel(
-        data_root_path='../data/meshdata',
+        data_root_path=args.data_root_path,
         batch_size_each=args.n_hand,
         device=device
     )

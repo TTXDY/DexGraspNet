@@ -79,6 +79,8 @@ parser.add_argument('--thres_dis', default=0.005, type=float)
 parser.add_argument('--thres_pen', default=0.001, type=float)
 parser.add_argument('--object_num_samples', default=2000, type=int,
                     help='Number of object surface points used for E_pen (higher = more accurate, slower).')
+parser.add_argument('--data_root_path', default='../data/meshdata', type=str,
+                    help='Directory to object meshes (e.g., ../data/meshdata or ../data/meshdata_local).')
 parser.add_argument('--random_obj_scale', action='store_true',
                     help='Enable random object scaling (default: off).')
 parser.add_argument('--random_hand', action='store_true',
@@ -184,7 +186,7 @@ else:
     print(f'Using Shadow Hand model ({hand_model.n_dofs} DOF)')
 
 object_model = ObjectModel(
-    data_root_path='../data/meshdata',
+    data_root_path=args.data_root_path,
     batch_size_each=args.batch_size,
     num_surface_samples=args.object_num_samples,
     device=device
