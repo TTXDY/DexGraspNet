@@ -193,6 +193,11 @@ def initialize_convex_hull(hand_model, object_model, args):
                 t[:, 0] = x
                 t[:, 1] = y
                 t[:, 2] = z
+                # Prevent initial hand pose from going below ground (object z_min).
+                z_min = float(obj_bounds[0][2])
+                below = t[:, 2] < z_min
+                if below.any():
+                    t[below, 2] = z_min + 0.01
                 translation[sl] = t
         else:
             rotation[i * batch_size_each: (i + 1) * batch_size_each] = rotation_global @ rotation_local @ rotation_hand

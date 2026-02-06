@@ -714,6 +714,65 @@ class HandModelDexHand021:
         # no output alignment
         return points
 
+    def get_mesh_vertices(self):
+        """
+        Get all mesh vertices in world coordinates.
+
+        Returns
+        -------
+        vertices: (B, V, 3) torch.Tensor
+            concatenated mesh vertices
+        """
+        vertices = []
+        batch_size = self.global_translation.shape[0]
+        for link_name in self.mesh:
+            v = self.current_status[link_name].transform_points(self.mesh[link_name]['vertices'])
+            if v.dim() == 2:
+                v = v.unsqueeze(0)
+            if v.shape[0] == 1 and batch_size > 1:
+                v = v.expand(batch_size, -1, -1)
+            vertices.append(v)
+        vertices = torch.cat(vertices, dim=1).to(self.device)
+        vertices = vertices @ self.global_rotation.transpose(1, 2) + self.global_translation.unsqueeze(1)
+        # no output alignment
+        return vertices
+
+    def ground_penetration(self, ground_height):
+        """
+        Compute hand-ground penetration using collision capsules and palm box.
+
+        Parameters
+        ----------
+        ground_height: (B,) torch.Tensor
+            ground plane height per batch
+
+        Returns
+        -------
+        penetration: (B,) torch.Tensor
+            summed penetration depths below ground
+        """
+        if ground_height.dim() != 1:
+            ground_height = ground_height.view(-1)
+        batch_size = self.global_translation.shape[0]
+        if ground_height.shape[0] != batch_size:
+            raise ValueError(f"ground_height batch {ground_height.shape[0]} != {batch_size}")
+        penetration = torch.zeros(batch_size, dtype=self.global_translation.dtype, device=self.device)
+
+        capsules = self._build_collision_capsules_world()
+        for p0, p1, radius in capsules:
+            min_z = torch.minimum(p0[:, 2], p1[:, 2]) - radius
+            penetration += (ground_height - min_z).clamp(min=0.0)
+
+        palm_box = self._build_palm_box_world_batch()
+        if palm_box is not None:
+            center, axes, extents = palm_box  # axes: (B,3,3)
+            # min z = center.z - sum_i |R_{z,i}| * extent_i
+            z_span = (axes[:, 2, :].abs() * extents).sum(dim=1)
+            min_z = center[:, 2] - z_span
+            penetration += (ground_height - min_z).clamp(min=0.0)
+
+        return penetration
+
     def get_contact_candidates(self):
         """
         Get all contact candidates

@@ -64,6 +64,8 @@ if __name__ == '__main__':
                         help='Show object surface points that fall inside collision capsules (black).')
     parser.add_argument('--max_pen_points', type=int, default=2000,
                         help='Max number of penetrating points to render.')
+    parser.add_argument('--show_ground', action='store_true',
+                        help='Show ground plane at object z_min.')
     args = parser.parse_args()
 
     device = 'cpu'
@@ -404,6 +406,38 @@ if __name__ == '__main__':
     _pose = np.eye(4, dtype=np.float32)
     _pose[:3, 3] = vis_offset.detach().cpu().numpy()
     object_plotly = object_model.get_plotly_data(i=0, color='lightgreen', opacity=0.7, pose=_pose)
+    ground_plotly = []
+    if args.show_ground:
+        mesh = object_model.object_mesh_list[0]
+        scale = float(data_dict['scale'])
+        bounds = mesh.bounds * scale
+        x_min, y_min, z_min = bounds[0]
+        x_max, y_max, _ = bounds[1]
+        cx = 0.5 * (x_min + x_max)
+        cy = 0.5 * (y_min + y_max)
+        half = 0.15  # 30cm x 30cm ground plane
+        x_min = cx - half
+        x_max = cx + half
+        y_min = cy - half
+        y_max = cy + half
+        z = z_min + float(vis_offset[2])
+        verts = np.array([
+            [x_min, y_min, z],
+            [x_max, y_min, z],
+            [x_max, y_max, z],
+            [x_min, y_max, z],
+        ])
+        faces = np.array([
+            [0, 1, 2],
+            [0, 2, 3],
+        ])
+        ground_plotly = [
+            go.Mesh3d(
+                x=verts[:, 0], y=verts[:, 1], z=verts[:, 2],
+                i=faces[:, 0], j=faces[:, 1], k=faces[:, 2],
+                color='gray', opacity=0.25
+            )
+        ]
 
     def _get_object_surface_points():
         if 'object_surface_points' in data_dict:
@@ -431,7 +465,8 @@ if __name__ == '__main__':
                     name='penetrating_points'
                 )]
 
-    fig = go.Figure(hand_st_plotly + hand_en_plotly + object_plotly + collision_capsules_plotly + pen_points_plotly)
+    fig = go.Figure(hand_st_plotly + hand_en_plotly + object_plotly + ground_plotly +
+                    collision_capsules_plotly + pen_points_plotly)
 
     # Add energy information if available
     if 'energy' in data_dict:

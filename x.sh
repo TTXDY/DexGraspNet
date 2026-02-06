@@ -68,13 +68,14 @@ CUDA_VISIBLE_DEVICES=0 python scripts/generate_grasps.py \
     --show_contact_points  \
     --num 0
 
- python visualize_result.py \
+ python tests/visualize_result.py \
     --data_root_path ../data/meshdata_local \
     --hand_model_type dexhand021 \
-    --object_code cylinder1 \
-    --result_path ../data/experiments/dexhand021_grasping \
-    --show_contact_points  \
-    --num 9
+    --object_code cube2 \
+    --result_path ../data/experiments/dexhand021_ground/results \
+    --show_contact_points \
+    --show_ground \
+    --num 0
 
 python main.py \
     --data_root_path ../data/meshdata_local \
@@ -172,6 +173,20 @@ python main.py \
     --n_iter 3000 \
     --gpu "0" \
     --contact_links "01,02,03,04" \
+    --object_num_samples 2000 \
+    --w_dis 100 \
+    --w_pen 500 \
+    --max_e_pen 0.01
+   
+python main.py \
+    --data_root_path ../data/meshdata_local \
+    --hand_model_type dexhand021 \
+    --object_code_list "['cube2']" \
+    --name dexhand021_ground \
+    --batch_size 24 \
+    --n_iter 3000 \
+    --gpu "0" \
+    --contact_links "01" \
     --object_num_samples 2000 \
     --w_dis 100 \
     --w_pen 500 \

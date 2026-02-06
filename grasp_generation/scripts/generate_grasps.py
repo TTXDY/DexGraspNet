@@ -164,6 +164,15 @@ def generate(args_list):
     skipped_e_pen = 0
     skipped_overflow = 0
 
+    use_ground = args.hand_model_type == 'dexhand021' and not args.random_hand and args.w_ground > 0
+    ground_height = None
+    if use_ground:
+        heights = []
+        for i, mesh in enumerate(object_model.object_mesh_list):
+            z_min = float(mesh.vertices[:, 2].min())
+            heights.append(object_model.object_scale_tensor[i] * z_min)
+        ground_height = torch.cat(heights, dim=0).to(device)
+
     for contact_tokens, contact_links_id in contact_runs:
         if contact_tokens is not None:
             args.n_contact = len(contact_tokens)
@@ -214,8 +223,11 @@ def generate(args_list):
             w_pen=args.w_pen,
             w_spen=args.w_spen,
             w_joints=args.w_joints,
+            w_ground=args.w_ground if use_ground else 0.0,
         )
-        energy, E_fc, E_dis, E_pen, E_spen, E_joints = cal_energy(hand_model, object_model, verbose=True, **weight_dict)
+        energy, E_fc, E_dis, E_pen, E_spen, E_joints, E_ground = cal_energy(
+            hand_model, object_model, ground_height=ground_height, verbose=True, **weight_dict
+        )
 
         energy.sum().backward(retain_graph=True)
 
@@ -223,7 +235,9 @@ def generate(args_list):
             optimizer.try_step()
 
             optimizer.zero_grad()
-            new_energy, new_E_fc, new_E_dis, new_E_pen, new_E_spen, new_E_joints = cal_energy(hand_model, object_model, verbose=True, **weight_dict)
+            new_energy, new_E_fc, new_E_dis, new_E_pen, new_E_spen, new_E_joints, new_E_ground = cal_energy(
+                hand_model, object_model, ground_height=ground_height, verbose=True, **weight_dict
+            )
 
             new_energy.sum().backward(retain_graph=True)
 
@@ -236,6 +250,7 @@ def generate(args_list):
                 E_pen[accept] = new_E_pen[accept]
                 E_spen[accept] = new_E_spen[accept]
                 E_joints[accept] = new_E_joints[accept]
+                E_ground[accept] = new_E_ground[accept]
 
 
         # save results
@@ -324,6 +339,7 @@ def generate(args_list):
                     E_pen=e_pen_val,
                     E_spen=E_spen[idx].item(),
                     E_joints=E_joints[idx].item(),
+                    E_ground=E_ground[idx].item(),
                 ))
     for object_code, data_list in data_lists_by_object.items():
         np.save(os.path.join(args.result_path, object_code + '.npy'), data_list, allow_pickle=True)
@@ -365,6 +381,8 @@ if __name__ == '__main__':
     parser.add_argument('--w_pen', default=100.0, type=float)
     parser.add_argument('--w_spen', default=10.0, type=float)
     parser.add_argument('--w_joints', default=1.0, type=float)
+    parser.add_argument('--w_ground', default=300.0, type=float,
+                        help='Weight for ground penetration penalty (dexhand021, non-random only).')
     # initialization settings
     parser.add_argument('--jitter_strength', default=0.1, type=float)
     parser.add_argument('--distance_lower', default=0.2, type=float)

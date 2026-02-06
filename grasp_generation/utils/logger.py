@@ -28,10 +28,10 @@ class Logger:
         self.thres_dis = thres_dis
         self.thres_pen = thres_pen
 
-    def log(self, energy, E_fc, E_dis, E_pen, E_spen, E_joints, step, show=False):
+    def log(self, energy, E_fc, E_dis, E_pen, E_spen, E_joints, E_ground, step, show=False):
         """
         Log energy terms and estimate success rate using energy thresholds
-        
+
         Parameters
         ----------
         energy: torch.Tensor
@@ -41,6 +41,7 @@ class Logger:
         E_pen: torch.Tensor
         E_spen: torch.Tensor
         E_joints: torch.Tensor
+        E_ground: torch.Tensor
         step: int
             current iteration of optimization
         show: bool
@@ -54,6 +55,7 @@ class Logger:
         self.writer.add_scalar('Energy/fc', E_fc.mean(), step)
         self.writer.add_scalar('Energy/dis', E_dis.mean(), step)
         self.writer.add_scalar('Energy/pen', E_pen.mean(), step)
+        self.writer.add_scalar('Energy/ground', E_ground.mean(), step)
 
         self.writer.add_scalar('Success/success', success.float().mean(), step)
         self.writer.add_scalar('Success/fc', success_fc.float().mean(), step)
@@ -61,5 +63,5 @@ class Logger:
         self.writer.add_scalar('Success/pen', success_pen.float().mean(), step)
 
         if show:
-            print(f'Step %d energy: %f  fc: %f  dis: %f  pen: %f  spen: %f  joints: %f' % (step, energy.mean(), E_fc.mean(), E_dis.mean(), E_pen.mean(), E_spen.mean(), E_joints.mean()))
+            print(f'Step %d energy: %f  fc: %f  dis: %f  pen: %f  spen: %f  joints: %f  ground: %f' % (step, energy.mean(), E_fc.mean(), E_dis.mean(), E_pen.mean(), E_spen.mean(), E_joints.mean(), E_ground.mean()))
             print(f'success: %f  fc: %f  dis: %f  pen: %f' % (success.float().mean(), success_fc.float().mean(), success_dis.float().mean(), success_pen.float().mean()))

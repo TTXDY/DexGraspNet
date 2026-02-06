@@ -281,6 +281,28 @@ class HandModel:
         points = points @ self.global_rotation.transpose(1, 2) + self.global_translation.unsqueeze(1)
         return points
 
+    def get_mesh_vertices(self):
+        """
+        Get all mesh vertices in world coordinates.
+
+        Returns
+        -------
+        vertices: (B, V, 3) torch.Tensor
+            concatenated mesh vertices
+        """
+        vertices = []
+        batch_size = self.global_translation.shape[0]
+        for link_name in self.mesh:
+            v = self.current_status[link_name].transform_points(self.mesh[link_name]['vertices'])
+            if v.dim() == 2:
+                v = v.unsqueeze(0)
+            if v.shape[0] == 1 and batch_size > 1:
+                v = v.expand(batch_size, -1, -1)
+            vertices.append(v)
+        vertices = torch.cat(vertices, dim=1).to(self.device)
+        vertices = vertices @ self.global_rotation.transpose(1, 2) + self.global_translation.unsqueeze(1)
+        return vertices
+
     def get_contact_candidates(self):
         """
         Get all contact candidates

@@ -7,7 +7,8 @@ Description: energy functions
 import torch
 
 
-def cal_energy(hand_model, object_model, w_dis=100.0, w_pen=100.0, w_spen=10.0, w_joints=1.0, verbose=False):
+def cal_energy(hand_model, object_model, w_dis=100.0, w_pen=100.0, w_spen=10.0, w_joints=1.0,
+               w_ground=0.0, ground_height=None, verbose=False):
     
     # E_dis
     batch_size, n_contact, _ = hand_model.contact_points.shape
@@ -43,7 +44,20 @@ def cal_energy(hand_model, object_model, w_dis=100.0, w_pen=100.0, w_spen=10.0, 
     # E_spen
     E_spen = hand_model.self_penetration()
 
-    if verbose:
-        return E_fc + w_dis * E_dis + w_pen * E_pen + w_spen * E_spen + w_joints * E_joints, E_fc, E_dis, E_pen, E_spen, E_joints
+    # E_ground (hand vs ground plane)
+    if ground_height is not None and w_ground > 0:
+        if hasattr(hand_model, "ground_penetration"):
+            E_ground = hand_model.ground_penetration(ground_height)
+        else:
+            vertices = hand_model.get_mesh_vertices()
+            z = vertices[:, :, 2]
+            ground = ground_height.view(-1, 1)
+            penetration = (ground - z).clamp(min=0)
+            E_ground = penetration.sum(dim=1)
     else:
-        return E_fc + w_dis * E_dis + w_pen * E_pen + w_spen * E_spen + w_joints * E_joints
+        E_ground = torch.zeros_like(E_pen)
+
+    if verbose:
+        return E_fc + w_dis * E_dis + w_pen * E_pen + w_spen * E_spen + w_joints * E_joints + w_ground * E_ground, E_fc, E_dis, E_pen, E_spen, E_joints, E_ground
+    else:
+        return E_fc + w_dis * E_dis + w_pen * E_pen + w_spen * E_spen + w_joints * E_joints + w_ground * E_ground
