@@ -77,6 +77,8 @@ parser.add_argument('--dexhand_theta_scale', default=0.7, type=float)
 parser.add_argument('--thres_fc', default=0.3, type=float)
 parser.add_argument('--thres_dis', default=0.005, type=float)
 parser.add_argument('--thres_pen', default=0.001, type=float)
+parser.add_argument('--max_e_pen', default=None, type=float,
+                    help='If set, discard results with E_pen > max_e_pen when saving.')
 parser.add_argument('--object_num_samples', default=2000, type=int,
                     help='Number of object surface points used for E_pen (higher = more accurate, slower).')
 parser.add_argument('--data_root_path', default='../data/meshdata', type=str,
@@ -89,6 +91,10 @@ parser.add_argument('--random_hand', action='store_true',
 args = parser.parse_args()
 if args.hand_model_type == 'dexhand021' and '--w_dis' not in sys.argv:
     args.w_dis = 300.0
+args.target_batch_size = args.batch_size
+args.batch_size = int(math.ceil(args.batch_size * 1.5))
+if args.batch_size != args.target_batch_size:
+    print(f"Using oversampled batch_size={args.batch_size} (target={args.target_batch_size})")
 
 # Fix object_code_list if it's a string from command line
 if isinstance(args.object_code_list, str):
@@ -345,10 +351,14 @@ except FileNotFoundError:
 os.makedirs(result_path, exist_ok=True)
 
 data_lists_by_object = {obj_code: [] for obj_code in args.object_code_list}
+skipped_e_pen = 0
+skipped_overflow = 0
 
 for contact_tokens, contact_links_id in _expand_contact_link_runs(args.contact_links, contact_links_map):
     if contact_links_id is not None:
         print(f"Running contact_links preset: {contact_links_id}")
+    contact_id = contact_links_id or "all"
+    per_contact_lists = {obj_code: [] for obj_code in args.object_code_list}
     hand_pose_st, energy, E_fc, E_dis, E_pen, E_spen, E_joints = _run_single_preset(contact_tokens, contact_links_id)
 
     full_hand_pose = hand_model.hand_pose.detach()
@@ -359,6 +369,9 @@ for contact_tokens, contact_links_id in _expand_contact_link_runs(args.contact_l
     for i in range(len(args.object_code_list)):
         for j in range(args.batch_size):
             idx = i * args.batch_size + j
+            if len(per_contact_lists[args.object_code_list[i]]) >= args.target_batch_size:
+                skipped_overflow += 1
+                continue
             scale = object_model.object_scale_tensor[i][j].item()
             surface_points = (object_model.surface_points_tensor[idx] * scale).detach().cpu().numpy()
             center_offset = surface_points.mean(axis=0)
@@ -396,6 +409,10 @@ for contact_tokens, contact_links_id in _expand_contact_link_runs(args.contact_l
             qpos_st.update(dict(zip(rot_names, euler)))
             qpos_st.update(dict(zip(translation_names, translation.tolist())))
             # Recompute E_pen using saved surface points for consistency.
+            e_pen_val = E_pen[idx].item()
+            if args.max_e_pen is not None and e_pen_val > args.max_e_pen:
+                skipped_e_pen += 1
+                continue
             with torch.no_grad():
                 surf = torch.tensor(surface_points, dtype=torch.float, device=device).unsqueeze(0)
                 hand_pose_raw[:3] -= torch.tensor(center_offset, dtype=hand_pose_raw.dtype)
@@ -406,7 +423,11 @@ for contact_tokens, contact_links_id in _expand_contact_link_runs(args.contact_l
                     hand_model.set_parameters(full_hand_pose, full_contact_indices)
                 else:
                     hand_model.set_parameters(full_hand_pose)
-            data_lists_by_object[args.object_code_list[i]].append(dict(
+            e_pen_val = E_pen[idx].item()
+            if args.max_e_pen is not None and e_pen_val > args.max_e_pen:
+                skipped_e_pen += 1
+                continue
+            per_contact_lists[args.object_code_list[i]].append(dict(
                 scale=scale,
                 object_surface_points=surface_points,
                 hand_pose_raw=hand_pose_raw.tolist(),
@@ -422,11 +443,23 @@ for contact_tokens, contact_links_id in _expand_contact_link_runs(args.contact_l
                 energy=energy[idx].item(),
                 E_fc=E_fc[idx].item(),
                 E_dis=E_dis[idx].item(),
-                E_pen=E_pen[idx].item(),
+                E_pen=e_pen_val,
                 E_pen_recomputed=E_pen_recomputed,
                 E_spen=E_spen[idx].item(),
                 E_joints=E_joints[idx].item(),
             ))
+    for obj_code, data_list in per_contact_lists.items():
+        data_list.sort(
+            key=lambda d: (
+                d.get("init_choice_index") is None,
+                d.get("init_choice_index"),
+                d.get("E_pen", float("inf")),
+            )
+        )
+        data_lists_by_object[obj_code].extend(data_list)
 
 for obj_code, data_list in data_lists_by_object.items():
     np.save(os.path.join(result_path, obj_code + '.npy'), data_list, allow_pickle=True)
+if args.max_e_pen is not None:
+    print(f"Filtered out {skipped_e_pen} grasps with E_pen > {args.max_e_pen}")
+print(f"Skipped {skipped_overflow} grasps after reaching target batch size per object")

@@ -161,6 +161,8 @@ def generate(args_list):
         contact_runs = _expand_contact_link_runs(args.contact_links, contact_links_map)
 
     data_lists_by_object = {object_code: [] for object_code in object_code_list}
+    skipped_e_pen = 0
+    skipped_overflow = 0
 
     for contact_tokens, contact_links_id in contact_runs:
         if contact_tokens is not None:
@@ -217,7 +219,7 @@ def generate(args_list):
 
         energy.sum().backward(retain_graph=True)
 
-        for step in range(1, args.n_iter + 1):
+        for step in tqdm(range(1, args.n_iter + 1), desc=f'optimizing (worker {worker})'):
             optimizer.try_step()
 
             optimizer.zero_grad()
@@ -254,6 +256,9 @@ def generate(args_list):
         for i, object_code in enumerate(object_code_list):
             for j in range(args.batch_size_each):
                 idx = i * args.batch_size_each + j
+                if len(data_lists_by_object[object_code]) >= args.target_batch_size_each:
+                    skipped_overflow += 1
+                    continue
                 scale = object_model.object_scale_tensor[i][j].item()
                 contact_point_indices = full_contact_indices[idx].detach().cpu().tolist() if full_contact_indices is not None else None
                 hand_pose = hand_model.hand_pose[idx].detach().cpu()
@@ -298,6 +303,10 @@ def generate(args_list):
                 euler = transforms3d.euler.mat2euler(rot, axes='sxyz')
                 qpos_st.update(dict(zip(rot_names, euler)))
                 qpos_st.update(dict(zip(translation_names, translation.tolist())))
+                e_pen_val = E_pen[idx].item()
+                if args.max_e_pen is not None and e_pen_val > args.max_e_pen:
+                    skipped_e_pen += 1
+                    continue
                 data_lists_by_object[object_code].append(dict(
                     scale=scale,
                     qpos=qpos,
@@ -312,18 +321,23 @@ def generate(args_list):
                     energy=energy[idx].item(),
                     E_fc=E_fc[idx].item(),
                     E_dis=E_dis[idx].item(),
-                    E_pen=E_pen[idx].item(),
+                    E_pen=e_pen_val,
                     E_spen=E_spen[idx].item(),
                     E_joints=E_joints[idx].item(),
                 ))
     for object_code, data_list in data_lists_by_object.items():
         np.save(os.path.join(args.result_path, object_code + '.npy'), data_list, allow_pickle=True)
+    if args.max_e_pen is not None:
+        print(f"Filtered out {skipped_e_pen} grasps with E_pen > {args.max_e_pen}")
+    print(f"Skipped {skipped_overflow} grasps after reaching target batch size per object")
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     # experiment settings
     parser.add_argument('--result_path', default="../data/graspdata", type=str)
+    parser.add_argument('--name', default=None, type=str,
+                        help='Experiment name. If set and --result_path not provided, save to ../data/experiments/<name>/results')
     parser.add_argument('--data_root_path', default="../data/meshdata", type=str)
     parser.add_argument('--hand_model_type', default='shadow_hand', type=str, choices=['shadow_hand', 'dexhand021'])
     parser.add_argument('--object_code_list', nargs='*', type=str)
@@ -364,6 +378,8 @@ if __name__ == '__main__':
     parser.add_argument('--thres_fc', default=0.3, type=float)
     parser.add_argument('--thres_dis', default=0.005, type=float)
     parser.add_argument('--thres_pen', default=0.001, type=float)
+    parser.add_argument('--max_e_pen', default=None, type=float,
+                        help='If set, discard results with E_pen > max_e_pen when saving.')
     parser.add_argument('--object_num_samples', default=2000, type=int,
                         help='Number of object surface points used for E_pen (higher = more accurate, slower).')
     parser.add_argument('--random_obj_scale', action='store_true',
@@ -372,6 +388,12 @@ if __name__ == '__main__':
                         help='Use randomized dexhand021 initialization (shadowhand-like) when set.')
 
     args = parser.parse_args()
+    if args.name and "--result_path" not in sys.argv:
+        args.result_path = os.path.join("..", "data", "experiments", args.name, "results")
+    args.target_batch_size_each = args.batch_size_each
+    args.batch_size_each = int(math.ceil(args.batch_size_each * 1.5))
+    if args.batch_size_each != args.target_batch_size_each:
+        print(f"Using oversampled batch_size_each={args.batch_size_each} (target={args.target_batch_size_each})")
 
     gpu_list = os.environ["CUDA_VISIBLE_DEVICES"].split(",")
     print(f'gpu_list: {gpu_list}')
@@ -406,6 +428,11 @@ if __name__ == '__main__':
     
     if args.object_code_list is not None:
         object_code_list = args.object_code_list
+        if len(object_code_list) == 1 and isinstance(object_code_list[0], str):
+            s = object_code_list[0].strip()
+            if s.startswith("[") and s.endswith("]"):
+                import ast
+                object_code_list = ast.literal_eval(s)
         if not set(object_code_list).issubset(set(object_code_list_all)):
             raise ValueError('object_code_list isn\'t a subset of dirs in data_root_path')
     else:

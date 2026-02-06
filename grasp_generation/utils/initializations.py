@@ -47,8 +47,8 @@ def initialize_convex_hull(hand_model, object_model, args):
         joint_angles_mu = joint_angles_mu_dexhand021.to(device=device, dtype=torch.float)
         # Predefined initialization orientations (randomly chosen per sample)
         rotation_hand_candidates = [
-            torch.tensor(transforms3d.euler.euler2mat(np.pi / 2, 0, np.pi, axes='sxyz'), dtype=torch.float, device=device),
             torch.tensor(transforms3d.euler.euler2mat(0, 0, np.pi, axes='sxyz'), dtype=torch.float, device=device),
+            torch.tensor(transforms3d.euler.euler2mat(np.pi / 2, 0, np.pi, axes='sxyz'), dtype=torch.float, device=device),
             torch.tensor(transforms3d.euler.euler2mat(np.pi / 2, 0, np.pi / 2, axes='sxyz'), dtype=torch.float, device=device),
         ]
         approach_direction = torch.tensor([0, 0, 1], dtype=torch.float, device=device)
@@ -174,8 +174,8 @@ def initialize_convex_hull(hand_model, object_model, args):
                 jitter_y = (torch.rand_like(y) - 0.5) * y_len_t
                 jitter_z = (torch.rand_like(z) - 0.5) * z_len_t
 
-                mask0 = choices == 0
-                mask1 = choices == 1
+                mask0 = choices == 1
+                mask1 = choices == 0
                 mask2 = choices == 2
 
                 y = torch.where(mask0, 3.0 * y_len_t, y)

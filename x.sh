@@ -63,10 +63,10 @@ CUDA_VISIBLE_DEVICES=0 python scripts/generate_grasps.py \
  python visualize_result.py \
     --data_root_path ../data/meshdata_local \
     --hand_model_type dexhand021 \
-    --object_code cylinder1 \
-    --result_path ../data/experiments/dexhand021_rl/results \
+    --object_code cube1 \
+    --result_path ../data/experiments/dexhand021_rl_v3/results \
     --show_contact_points  \
-    --num 9
+    --num 0
 
  python visualize_result.py \
     --data_root_path ../data/meshdata_local \
@@ -137,8 +137,42 @@ python main.py \
     --random_obj_scale
 
 
+CUDA_VISIBLE_DEVICES=0 python scripts/generate_grasps.py \
+    --data_root_path ../data/meshdata_local \
+    --hand_model_type dexhand021 \
+    --object_code_list  "['cylinder1','cylinder2','cylinder3','cylinder5','cylinder6','sphere1','cuboid2','cuboid3','cube1','cube2']" \
+    --name dexhand021_rl_v2 \
+    --batch_size_each 32 \
+    --n_iter 5000 \
+    --contact_links "01,02,03,04" \
+    --object_num_samples 2000 \
+    --w_dis 100 \
+    --w_pen 500 \
+    --max_e_pen 0.01
+
  python scripts/render_grasp_grid.py \
       --result_dir ../data/experiments/dexhand021_grasping \
       --objects "core-02773838-4a1f62dbe8b091eabc49cae1a831a9e, core-04074963-c99bbef1b2c514a81b22d29e47ec3f2" \
       --grasps 24 \
       --output dexhand_random1.html
+
+ python scripts/render_grasp_grid.py \
+    --result_dir ../data/experiments/dexhand021_rl_v2/results \
+    --data_root_path ../data/meshdata_local \
+    --contact_links "01,02,03,04" \
+    --grasps 24 \
+    --output dexhand_test_cylinder1.html
+
+python main.py \
+    --data_root_path ../data/meshdata_local \
+    --hand_model_type dexhand021 \
+    --object_code_list "['cylinder1','cylinder2','cylinder3','cylinder5','cylinder6','sphere1','cuboid2','cuboid3','cube1','cube2']" \
+    --name dexhand021_rl_v3 \
+    --batch_size 24 \
+    --n_iter 3000 \
+    --gpu "0" \
+    --contact_links "01,02,03,04" \
+    --object_num_samples 2000 \
+    --w_dis 100 \
+    --w_pen 500 \
+    --max_e_pen 0.01
