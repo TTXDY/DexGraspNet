@@ -46,6 +46,17 @@ def _load_todo(path):
         return [line.strip() for line in f if line.strip()]
 
 
+def _scan_objects(mesh_root):
+    objects = []
+    if not mesh_root:
+        return objects
+    for name in sorted(os.listdir(mesh_root)):
+        mesh_path = os.path.join(mesh_root, name, "coacd", "decomposed.obj")
+        if os.path.isfile(mesh_path):
+            objects.append(name)
+    return objects
+
+
 def _parse_contact_links(text):
     if text is None:
         return None
@@ -172,8 +183,8 @@ def main():
     parser.add_argument("--mesh_root", type=str, default=None)
     parser.add_argument("--data_root_path", type=str, default="../data/meshdata",
                         help="Alias for --mesh_root (kept for consistency with other scripts).")
-    parser.add_argument("--col_stride", type=float, default=0.35, help="Grid spacing along X")
-    parser.add_argument("--row_stride", type=float, default=0.35, help="Grid spacing along Y")
+    parser.add_argument("--col_stride", type=float, default=0.45, help="Grid spacing along X")
+    parser.add_argument("--row_stride", type=float, default=0.45, help="Grid spacing along Y")
     parser.add_argument("--output", type=str, default="dexhand_grid.html")
     parser.add_argument("--hand_opacity", type=float, default=1.0)
     parser.add_argument("--object_opacity", type=float, default=1.0)
@@ -188,7 +199,11 @@ def main():
     if args.todo:
         if args.objects:
             raise ValueError("when using --todo, do not set --objects")
-        objects = _load_todo(args.todo)
+        if args.todo.strip().lower() == "all":
+            objects = _scan_objects(args.mesh_root)
+            print(f"Using all objects under {args.mesh_root}: {len(objects)}")
+        else:
+            objects = _load_todo(args.todo)
     else:
         objects = _parse_list(args.objects)
     if not objects:

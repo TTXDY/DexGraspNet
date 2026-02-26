@@ -27,6 +27,42 @@ from utils.energy import cal_energy
 from utils.optimizer import Annealing
 from utils.rot6d import robust_compute_rotation_matrix_from_ortho6d
 
+
+def _select_balanced_by_choice(data_list, target, choice_pool=None):
+    if not data_list or target <= 0:
+        return [], 0
+    if choice_pool is None:
+        choices = sorted({d.get("init_choice_index") for d in data_list if d.get("init_choice_index") is not None})
+    else:
+        choices = list(choice_pool)
+    if not choices:
+        data_list.sort(key=lambda d: (d.get("E_pen", float("inf")), d.get("E_dis", float("inf")), d.get("E_fc", float("inf"))))
+        return data_list[:target], 0
+    per = target // len(choices)
+    rem = target % len(choices)
+    by_choice = {c: [] for c in choices}
+    for d in data_list:
+        c = d.get("init_choice_index")
+        if c in by_choice:
+            by_choice[c].append(d)
+    used_over_max = 0
+    selected = []
+    for i, c in enumerate(choices):
+        items = by_choice[c]
+        items.sort(key=lambda d: (d.get("E_pen", float("inf")), d.get("E_dis", float("inf")), d.get("E_fc", float("inf"))))
+        take = per + (1 if i < rem else 0)
+        if take == 0:
+            continue
+        ok = [d for d in items if not d.get("over_max_e_pen", False)]
+        over = [d for d in items if d.get("over_max_e_pen", False)]
+        sel = ok[:take]
+        if len(sel) < take:
+            fill = over[:take - len(sel)]
+            used_over_max += len(fill)
+            sel += fill
+        selected.extend(sel)
+    return selected, used_over_max
+
 from torch.multiprocessing import set_start_method
 
 try:
@@ -148,6 +184,7 @@ def generate(args_list):
         data_root_path=args.data_root_path,
         batch_size_each=args.batch_size_each,
         num_surface_samples=args.object_num_samples,
+        surface_scale=args.surface_scale,
         device=device
     )
     object_model.initialize(object_code_list)
@@ -162,7 +199,7 @@ def generate(args_list):
 
     data_lists_by_object = {object_code: [] for object_code in object_code_list}
     skipped_e_pen = 0
-    skipped_overflow = 0
+    used_over_max = 0
 
     use_ground = args.hand_model_type == 'dexhand021' and not args.random_hand and args.w_ground > 0
     ground_height = None
@@ -268,12 +305,15 @@ def generate(args_list):
                 'robot0:THJ4', 'robot0:THJ3', 'robot0:THJ2', 'robot0:THJ1', 'robot0:THJ0'
             ]
         full_contact_indices = hand_model.contact_point_indices.detach() if hand_model.contact_point_indices is not None else None
+        init_choice_indices = getattr(hand_model, "init_choice_indices", None)
+        if init_choice_indices is not None:
+            init_choice_indices = init_choice_indices.detach().cpu().tolist()
+            choice_pool = sorted(set(init_choice_indices))
+        else:
+            choice_pool = None
         for i, object_code in enumerate(object_code_list):
             for j in range(args.batch_size_each):
                 idx = i * args.batch_size_each + j
-                if len(data_lists_by_object[object_code]) >= args.target_batch_size_each:
-                    skipped_overflow += 1
-                    continue
                 scale = object_model.object_scale_tensor[i][j].item()
                 contact_point_indices = full_contact_indices[idx].detach().cpu().tolist() if full_contact_indices is not None else None
                 hand_pose = hand_model.hand_pose[idx].detach().cpu()
@@ -319,9 +359,10 @@ def generate(args_list):
                 qpos_st.update(dict(zip(rot_names, euler)))
                 qpos_st.update(dict(zip(translation_names, translation.tolist())))
                 e_pen_val = E_pen[idx].item()
+                over_max = False
                 if args.max_e_pen is not None and e_pen_val > args.max_e_pen:
+                    over_max = True
                     skipped_e_pen += 1
-                    continue
                 data_lists_by_object[object_code].append(dict(
                     scale=scale,
                     qpos=qpos,
@@ -333,6 +374,8 @@ def generate(args_list):
                     contact_point_indices=contact_point_indices,
                     contact_links_id=contact_links_id,
                     contact_links_tokens=contact_tokens,
+                    init_choice_index=init_choice_indices[idx] if init_choice_indices is not None else None,
+                    over_max_e_pen=over_max,
                     energy=energy[idx].item(),
                     E_fc=E_fc[idx].item(),
                     E_dis=E_dis[idx].item(),
@@ -342,10 +385,14 @@ def generate(args_list):
                     E_ground=E_ground[idx].item(),
                 ))
     for object_code, data_list in data_lists_by_object.items():
-        np.save(os.path.join(args.result_path, object_code + '.npy'), data_list, allow_pickle=True)
+        selected, used = _select_balanced_by_choice(data_list, args.target_batch_size_each, choice_pool=choice_pool)
+        used_over_max += used
+        if len(selected) < args.target_batch_size_each:
+            print(f"Warning: {object_code} selected {len(selected)}/{args.target_batch_size_each} after balancing.")
+        np.save(os.path.join(args.result_path, object_code + '.npy'), selected, allow_pickle=True)
     if args.max_e_pen is not None:
-        print(f"Filtered out {skipped_e_pen} grasps with E_pen > {args.max_e_pen}")
-    print(f"Skipped {skipped_overflow} grasps after reaching target batch size per object")
+        print(f"Candidates over max E_pen: {skipped_e_pen}")
+        print(f"Used over-max grasps to fill quotas: {used_over_max}")
 
 
 if __name__ == '__main__':
@@ -360,6 +407,8 @@ if __name__ == '__main__':
     parser.add_argument('--all', action='store_true')
     parser.add_argument('--overwrite', action='store_true')
     parser.add_argument('--todo', action='store_true')
+    parser.add_argument('--todo_file', type=str, default="todo.txt",
+                        help="Path to todo file (used with --todo).")
     parser.add_argument('--seed', default=1, type=int)
     parser.add_argument('--n_contact', default=4, type=int)
     parser.add_argument('--batch_size_each', default=500, type=int)
@@ -400,16 +449,24 @@ if __name__ == '__main__':
                         help='If set, discard results with E_pen > max_e_pen when saving.')
     parser.add_argument('--object_num_samples', default=2000, type=int,
                         help='Number of object surface points used for E_pen (higher = more accurate, slower).')
+    parser.add_argument('--surface_scale', default=1.0, type=float,
+                        help='Scale object surface for sampling (about mesh centroid).')
     parser.add_argument('--random_obj_scale', action='store_true',
                         help='Enable random object scaling (default: off).')
     parser.add_argument('--random_hand', action='store_true',
                         help='Use randomized dexhand021 initialization (shadowhand-like) when set.')
+    parser.add_argument('--thumb_spread_deg_min', default=50.0, type=float,
+                        help='DexHand021 thumb spread mean lower bound (degrees).')
+    parser.add_argument('--thumb_spread_deg_max', default=80.0, type=float,
+                        help='DexHand021 thumb spread mean upper bound (degrees).')
+    parser.add_argument('--init_choice_perturb_deg', default=45.0, type=float,
+                        help='Max rotation perturbation (degrees) applied to each init choice.')
 
     args = parser.parse_args()
     if args.name and "--result_path" not in sys.argv:
         args.result_path = os.path.join("..", "data", "experiments", args.name, "results")
     args.target_batch_size_each = args.batch_size_each
-    args.batch_size_each = int(math.ceil(args.batch_size_each * 1.5))
+    args.batch_size_each = int(math.ceil(args.batch_size_each * 2.0))
     if args.batch_size_each != args.target_batch_size_each:
         print(f"Using oversampled batch_size_each={args.batch_size_each} (target={args.target_batch_size_each})")
 
@@ -438,7 +495,7 @@ if __name__ == '__main__':
             raise ValueError('exactly one among \'object_code_list\' \'all\' should be specified')
     
     if args.todo:
-        with open("todo.txt", "r") as f:
+        with open(args.todo_file, "r") as f:
             lines = f.readlines()
             object_code_list_all = [line[:-1] for line in lines]
     else:

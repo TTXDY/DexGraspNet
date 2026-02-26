@@ -29,6 +29,42 @@ from utils.logger import Logger
 from utils.rot6d import robust_compute_rotation_matrix_from_ortho6d
 
 
+def _select_balanced_by_choice(data_list, target, choice_pool=None):
+    if not data_list or target <= 0:
+        return [], 0
+    if choice_pool is None:
+        choices = sorted({d.get("init_choice_index") for d in data_list if d.get("init_choice_index") is not None})
+    else:
+        choices = list(choice_pool)
+    if not choices:
+        data_list.sort(key=lambda d: (d.get("E_pen", float("inf")), d.get("E_dis", float("inf")), d.get("E_fc", float("inf"))))
+        return data_list[:target], 0
+    per = target // len(choices)
+    rem = target % len(choices)
+    by_choice = {c: [] for c in choices}
+    for d in data_list:
+        c = d.get("init_choice_index")
+        if c in by_choice:
+            by_choice[c].append(d)
+    used_over_max = 0
+    selected = []
+    for i, c in enumerate(choices):
+        items = by_choice[c]
+        items.sort(key=lambda d: (d.get("E_pen", float("inf")), d.get("E_dis", float("inf")), d.get("E_fc", float("inf"))))
+        take = per + (1 if i < rem else 0)
+        if take == 0:
+            continue
+        ok = [d for d in items if not d.get("over_max_e_pen", False)]
+        over = [d for d in items if d.get("over_max_e_pen", False)]
+        sel = ok[:take]
+        if len(sel) < take:
+            fill = over[:take - len(sel)]
+            used_over_max += len(fill)
+            sel += fill
+        selected.extend(sel)
+    return selected, used_over_max
+
+
 # prepare arguments
 
 parser = argparse.ArgumentParser()
@@ -44,6 +80,8 @@ parser.add_argument('--object_code_list', default=
         'sem-Car-58379002fbdaf20e61a47cff24512a0',
         'sem-Car-aeeb2fb31215f3249acee38782dd9680',
     ])
+parser.add_argument('--todo', type=str, default=None,
+                    help='Path to todo file (one object code per line). Use \"all\" to scan data_root_path.')
 parser.add_argument('--name', default='exp_2', type=str)
 parser.add_argument('--n_contact', default=4, type=int)
 parser.add_argument('--batch_size', default=128, type=int)
@@ -83,25 +121,47 @@ parser.add_argument('--max_e_pen', default=None, type=float,
                     help='If set, discard results with E_pen > max_e_pen when saving.')
 parser.add_argument('--object_num_samples', default=2000, type=int,
                     help='Number of object surface points used for E_pen (higher = more accurate, slower).')
+parser.add_argument('--surface_scale', default=1.0, type=float,
+                    help='Scale object surface for sampling (about mesh centroid).')
 parser.add_argument('--data_root_path', default='../data/meshdata', type=str,
                     help='Directory to object meshes (e.g., ../data/meshdata or ../data/meshdata_local).')
 parser.add_argument('--random_obj_scale', action='store_true',
                     help='Enable random object scaling (default: off).')
 parser.add_argument('--random_hand', action='store_true',
                     help='Use randomized dexhand021 initialization (shadowhand-like) when set.')
+parser.add_argument('--thumb_spread_deg_min', default=50.0, type=float,
+                    help='DexHand021 thumb spread mean lower bound (degrees).')
+parser.add_argument('--thumb_spread_deg_max', default=80.0, type=float,
+                    help='DexHand021 thumb spread mean upper bound (degrees).')
+parser.add_argument('--init_choice_perturb_deg', default=45.0, type=float,
+                    help='Max rotation perturbation (degrees) applied to each init choice.')
 
 args = parser.parse_args()
 if args.hand_model_type == 'dexhand021' and '--w_dis' not in sys.argv:
     args.w_dis = 300.0
 args.target_batch_size = args.batch_size
-args.batch_size = int(math.ceil(args.batch_size * 1.5))
+args.batch_size = int(math.ceil(args.batch_size * 2.0))
 if args.batch_size != args.target_batch_size:
     print(f"Using oversampled batch_size={args.batch_size} (target={args.target_batch_size})")
 
-# Fix object_code_list if it's a string from command line
-if isinstance(args.object_code_list, str):
-    import ast
-    args.object_code_list = ast.literal_eval(args.object_code_list)
+# Load todo file if provided
+if args.todo:
+    if args.todo.strip().lower() == "all":
+        object_codes = []
+        for name in sorted(os.listdir(args.data_root_path)):
+            mesh_path = os.path.join(args.data_root_path, name, "coacd", "decomposed.obj")
+            if os.path.isfile(mesh_path):
+                object_codes.append(name)
+        args.object_code_list = object_codes
+        print(f"Using all objects under {args.data_root_path}: {len(args.object_code_list)}")
+    else:
+        with open(args.todo, "r") as f:
+            args.object_code_list = [line.strip() for line in f if line.strip()]
+else:
+    # Fix object_code_list if it's a string from command line
+    if isinstance(args.object_code_list, str):
+        import ast
+        args.object_code_list = ast.literal_eval(args.object_code_list)
 
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
 
@@ -167,7 +227,14 @@ def _map_contact_token(token, hand_model_type):
 
 # prepare models
 
-total_batch_size = len(args.object_code_list) * args.batch_size
+all_object_codes = list(args.object_code_list)
+chunk_size = 20
+object_code_chunks = [
+    all_object_codes[i:i + chunk_size]
+    for i in range(0, len(all_object_codes), chunk_size)
+]
+
+total_batch_size = 0
 
 os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -193,27 +260,11 @@ else:
     )
     print(f'Using Shadow Hand model ({hand_model.n_dofs} DOF)')
 
-object_model = ObjectModel(
-    data_root_path=args.data_root_path,
-    batch_size_each=args.batch_size,
-    num_surface_samples=args.object_num_samples,
-    device=device
-)
-object_model.initialize(args.object_code_list)
-if not args.random_obj_scale:
-    object_model.object_scale_tensor = torch.ones_like(object_model.object_scale_tensor)
-
+object_model = None
 use_ground = args.hand_model_type == 'dexhand021' and not args.random_hand and args.w_ground > 0
 ground_height = None
-if use_ground:
-    heights = []
-    for i, mesh in enumerate(object_model.object_mesh_list):
-        z_min = float(mesh.vertices[:, 2].min())
-        heights.append(object_model.object_scale_tensor[i] * z_min)
-    ground_height = torch.cat(heights, dim=0).to(device)
 
 print('n_contact_candidates', hand_model.n_contact_candidates)
-print('total batch size', total_batch_size)
 
 contact_links_map = _load_contact_links_map(args.contact_links_file)
 
@@ -367,117 +418,141 @@ except FileNotFoundError:
     pass
 os.makedirs(result_path, exist_ok=True)
 
-data_lists_by_object = {obj_code: [] for obj_code in args.object_code_list}
+data_lists_by_object = {obj_code: [] for obj_code in all_object_codes}
 skipped_e_pen = 0
-skipped_overflow = 0
+used_over_max = 0
 
-for contact_tokens, contact_links_id in _expand_contact_link_runs(args.contact_links, contact_links_map):
-    if contact_links_id is not None:
-        print(f"Running contact_links preset: {contact_links_id}")
-    contact_id = contact_links_id or "all"
-    per_contact_lists = {obj_code: [] for obj_code in args.object_code_list}
-    hand_pose_st, energy, E_fc, E_dis, E_pen, E_spen, E_joints, E_ground = _run_single_preset(contact_tokens, contact_links_id)
+for chunk_idx, object_codes_chunk in enumerate(object_code_chunks, start=1):
+    print(f"Processing object chunk {chunk_idx}/{len(object_code_chunks)}: {len(object_codes_chunk)} objects")
+    total_batch_size = len(object_codes_chunk) * args.batch_size
+    print('total batch size', total_batch_size)
 
-    full_hand_pose = hand_model.hand_pose.detach()
-    full_contact_indices = hand_model.contact_point_indices.detach() if hand_model.contact_point_indices is not None else None
-    init_choice_indices = getattr(hand_model, "init_choice_indices", None)
-    if init_choice_indices is not None:
-        init_choice_indices = init_choice_indices.detach().cpu().tolist()
-    for i in range(len(args.object_code_list)):
-        for j in range(args.batch_size):
-            idx = i * args.batch_size + j
-            if len(per_contact_lists[args.object_code_list[i]]) >= args.target_batch_size:
-                skipped_overflow += 1
-                continue
-            scale = object_model.object_scale_tensor[i][j].item()
-            surface_points = (object_model.surface_points_tensor[idx] * scale).detach().cpu().numpy()
-            center_offset = surface_points.mean(axis=0)
-            surface_points = (surface_points - center_offset).tolist()
-            contact_point_indices = full_contact_indices[idx].detach().cpu().tolist() if full_contact_indices is not None else None
-            hand_pose_cpu = full_hand_pose[idx].detach().cpu()
-            hand_pose_raw = hand_pose_cpu.clone()
-            if args.hand_model_type == 'dexhand021':
-                joint_angles_full = hand_model.controls_to_joint_angles(hand_pose_cpu[9:]).squeeze(0).detach().cpu()
-                qpos = dict(zip(joint_names_full, joint_angles_full.tolist()))
-                controls = dict(zip(control_names, hand_pose_cpu[9:].tolist()))
-            else:
-                qpos = dict(zip(joint_names, hand_pose_cpu[9:].tolist()))
-                controls = None
-            rot = robust_compute_rotation_matrix_from_ortho6d(hand_pose_cpu[3:9].unsqueeze(0))[0]
-            translation = hand_pose_cpu[:3] - torch.tensor(center_offset, dtype=hand_pose_cpu.dtype)
-            euler = transforms3d.euler.mat2euler(rot, axes='sxyz')
-            qpos.update(dict(zip(rot_names, euler)))
-            qpos.update(dict(zip(translation_names, translation.tolist())))
-            intrinsic_euler_hand_pose_3_3_12 = None
-            if controls is not None:
-                euler_intr = transforms3d.euler.mat2euler(rot, axes='rxyz')
-                intrinsic_euler_hand_pose_3_3_12 = translation.tolist() + list(euler_intr) + [controls[name] for name in control_names]
-            hand_pose_st_cpu = hand_pose_st[idx].detach().cpu()
-            if args.hand_model_type == 'dexhand021':
-                joint_angles_full_st = hand_model.controls_to_joint_angles(hand_pose_st_cpu[9:]).squeeze(0).detach().cpu()
-                qpos_st = dict(zip(joint_names_full, joint_angles_full_st.tolist()))
-                controls_st = dict(zip(control_names, hand_pose_st_cpu[9:].tolist()))
-            else:
-                qpos_st = dict(zip(joint_names, hand_pose_st_cpu[9:].tolist()))
-                controls_st = None
-            rot = robust_compute_rotation_matrix_from_ortho6d(hand_pose_st_cpu[3:9].unsqueeze(0))[0]
-            translation = hand_pose_st_cpu[:3] - torch.tensor(center_offset, dtype=hand_pose_st_cpu.dtype)
-            euler = transforms3d.euler.mat2euler(rot, axes='sxyz')
-            qpos_st.update(dict(zip(rot_names, euler)))
-            qpos_st.update(dict(zip(translation_names, translation.tolist())))
-            # Recompute E_pen using saved surface points for consistency.
-            e_pen_val = E_pen[idx].item()
-            if args.max_e_pen is not None and e_pen_val > args.max_e_pen:
-                skipped_e_pen += 1
-                continue
-            with torch.no_grad():
-                surf = torch.tensor(surface_points, dtype=torch.float, device=device).unsqueeze(0)
-                hand_pose_raw[:3] -= torch.tensor(center_offset, dtype=hand_pose_raw.dtype)
-                hand_pose_raw_device = hand_pose_raw.to(device)
-                hand_model.set_parameters(hand_pose_raw_device.unsqueeze(0))
-                E_pen_recomputed = float(hand_model.cal_distance(surf).clamp_min(0).sum().item())
-                if full_contact_indices is not None:
-                    hand_model.set_parameters(full_hand_pose, full_contact_indices)
+    object_model = ObjectModel(
+        data_root_path=args.data_root_path,
+        batch_size_each=args.batch_size,
+        num_surface_samples=args.object_num_samples,
+        surface_scale=args.surface_scale,
+        device=device
+    )
+    object_model.initialize(object_codes_chunk)
+    if not args.random_obj_scale:
+        object_model.object_scale_tensor = torch.ones_like(object_model.object_scale_tensor)
+
+    ground_height = None
+    if use_ground:
+        heights = []
+        for i, mesh in enumerate(object_model.object_mesh_list):
+            z_min = float(mesh.vertices[:, 2].min())
+            heights.append(object_model.object_scale_tensor[i] * z_min)
+        ground_height = torch.cat(heights, dim=0).to(device)
+
+    for contact_tokens, contact_links_id in _expand_contact_link_runs(args.contact_links, contact_links_map):
+        if contact_links_id is not None:
+            print(f"Running contact_links preset: {contact_links_id}")
+        contact_id = contact_links_id or "all"
+        per_contact_lists = {obj_code: [] for obj_code in object_codes_chunk}
+        hand_pose_st, energy, E_fc, E_dis, E_pen, E_spen, E_joints, E_ground = _run_single_preset(contact_tokens, contact_links_id)
+
+        full_hand_pose = hand_model.hand_pose.detach()
+        full_contact_indices = hand_model.contact_point_indices.detach() if hand_model.contact_point_indices is not None else None
+        init_choice_indices = getattr(hand_model, "init_choice_indices", None)
+        if init_choice_indices is not None:
+            init_choice_indices = init_choice_indices.detach().cpu().tolist()
+            choice_pool = sorted(set(init_choice_indices))
+        else:
+            choice_pool = None
+        for i in range(len(object_codes_chunk)):
+            for j in range(args.batch_size):
+                idx = i * args.batch_size + j
+                scale = object_model.object_scale_tensor[i][j].item()
+                surface_points = (object_model.surface_points_tensor[idx] * scale).detach().cpu().numpy()
+                center_offset = surface_points.mean(axis=0)
+                surface_points = (surface_points - center_offset).tolist()
+                contact_point_indices = full_contact_indices[idx].detach().cpu().tolist() if full_contact_indices is not None else None
+                hand_pose_cpu = full_hand_pose[idx].detach().cpu()
+                hand_pose_raw = hand_pose_cpu.clone()
+                if args.hand_model_type == 'dexhand021':
+                    joint_angles_full = hand_model.controls_to_joint_angles(hand_pose_cpu[9:]).squeeze(0).detach().cpu()
+                    qpos = dict(zip(joint_names_full, joint_angles_full.tolist()))
+                    controls = dict(zip(control_names, hand_pose_cpu[9:].tolist()))
                 else:
-                    hand_model.set_parameters(full_hand_pose)
-            e_pen_val = E_pen[idx].item()
-            if args.max_e_pen is not None and e_pen_val > args.max_e_pen:
-                skipped_e_pen += 1
-                continue
-            per_contact_lists[args.object_code_list[i]].append(dict(
-                scale=scale,
-                object_surface_points=surface_points,
-                hand_pose_raw=hand_pose_raw.tolist(),
-                intrinsic_euler_hand_pose_3_3_12=intrinsic_euler_hand_pose_3_3_12,
-                qpos=qpos,
-                qpos_st=qpos_st,
-                controls=controls,
-                controls_st=controls_st,
-                contact_point_indices=contact_point_indices,
-                contact_links_id=contact_links_id,
-                contact_links_tokens=contact_tokens,
-                init_choice_index=init_choice_indices[idx] if init_choice_indices is not None else None,
-                energy=energy[idx].item(),
-                E_fc=E_fc[idx].item(),
-                E_dis=E_dis[idx].item(),
-                E_pen=e_pen_val,
-                E_pen_recomputed=E_pen_recomputed,
-                E_spen=E_spen[idx].item(),
-                E_joints=E_joints[idx].item(),
-                E_ground=E_ground[idx].item(),
-            ))
-    for obj_code, data_list in per_contact_lists.items():
-        data_list.sort(
-            key=lambda d: (
-                d.get("init_choice_index") is None,
-                d.get("init_choice_index"),
-                d.get("E_pen", float("inf")),
-            )
-        )
-        data_lists_by_object[obj_code].extend(data_list)
+                    qpos = dict(zip(joint_names, hand_pose_cpu[9:].tolist()))
+                    controls = None
+                rot = robust_compute_rotation_matrix_from_ortho6d(hand_pose_cpu[3:9].unsqueeze(0))[0]
+                translation = hand_pose_cpu[:3] - torch.tensor(center_offset, dtype=hand_pose_cpu.dtype)
+                euler = transforms3d.euler.mat2euler(rot, axes='sxyz')
+                qpos.update(dict(zip(rot_names, euler)))
+                qpos.update(dict(zip(translation_names, translation.tolist())))
+                intrinsic_euler_hand_pose_3_3_12 = None
+                if controls is not None:
+                    euler_intr = transforms3d.euler.mat2euler(rot, axes='rxyz')
+                    intrinsic_euler_hand_pose_3_3_12 = translation.tolist() + list(euler_intr) + [controls[name] for name in control_names]
+                hand_pose_st_cpu = hand_pose_st[idx].detach().cpu()
+                if args.hand_model_type == 'dexhand021':
+                    joint_angles_full_st = hand_model.controls_to_joint_angles(hand_pose_st_cpu[9:]).squeeze(0).detach().cpu()
+                    qpos_st = dict(zip(joint_names_full, joint_angles_full_st.tolist()))
+                    controls_st = dict(zip(control_names, hand_pose_st_cpu[9:].tolist()))
+                else:
+                    qpos_st = dict(zip(joint_names, hand_pose_st_cpu[9:].tolist()))
+                    controls_st = None
+                rot = robust_compute_rotation_matrix_from_ortho6d(hand_pose_st_cpu[3:9].unsqueeze(0))[0]
+                translation = hand_pose_st_cpu[:3] - torch.tensor(center_offset, dtype=hand_pose_st_cpu.dtype)
+                euler = transforms3d.euler.mat2euler(rot, axes='sxyz')
+                qpos_st.update(dict(zip(rot_names, euler)))
+                qpos_st.update(dict(zip(translation_names, translation.tolist())))
+                # Recompute E_pen using saved surface points for consistency.
+                e_pen_val = E_pen[idx].item()
+                with torch.no_grad():
+                    surf = torch.tensor(surface_points, dtype=torch.float, device=device).unsqueeze(0)
+                    hand_pose_raw[:3] -= torch.tensor(center_offset, dtype=hand_pose_raw.dtype)
+                    hand_pose_raw_device = hand_pose_raw.to(device)
+                    hand_model.set_parameters(hand_pose_raw_device.unsqueeze(0))
+                    E_pen_recomputed = float(hand_model.cal_distance(surf).clamp_min(0).sum().item())
+                    if full_contact_indices is not None:
+                        hand_model.set_parameters(full_hand_pose, full_contact_indices)
+                    else:
+                        hand_model.set_parameters(full_hand_pose)
+                e_pen_val = E_pen[idx].item()
+                over_max = False
+                if args.max_e_pen is not None and e_pen_val > args.max_e_pen:
+                    over_max = True
+                    skipped_e_pen += 1
+                per_contact_lists[object_codes_chunk[i]].append(dict(
+                    scale=scale,
+                    object_center_offset=center_offset.tolist(),
+                    object_surface_points=surface_points,
+                    hand_pose_raw=hand_pose_raw.tolist(),
+                    intrinsic_euler_hand_pose_3_3_12=intrinsic_euler_hand_pose_3_3_12,
+                    qpos=qpos,
+                    qpos_st=qpos_st,
+                    controls=controls,
+                    controls_st=controls_st,
+                    contact_point_indices=contact_point_indices,
+                    contact_links_id=contact_links_id,
+                    contact_links_tokens=contact_tokens,
+                    init_choice_index=init_choice_indices[idx] if init_choice_indices is not None else None,
+                    over_max_e_pen=over_max,
+                    energy=energy[idx].item(),
+                    E_fc=E_fc[idx].item(),
+                    E_dis=E_dis[idx].item(),
+                    E_pen=e_pen_val,
+                    E_pen_recomputed=E_pen_recomputed,
+                    E_spen=E_spen[idx].item(),
+                    E_joints=E_joints[idx].item(),
+                    E_ground=E_ground[idx].item(),
+                ))
+        for obj_code, data_list in per_contact_lists.items():
+            selected, used = _select_balanced_by_choice(data_list, args.target_batch_size, choice_pool=choice_pool)
+            used_over_max += used
+            if len(selected) < args.target_batch_size:
+                print(f"Warning: {obj_code} selected {len(selected)}/{args.target_batch_size} after balancing.")
+            data_lists_by_object[obj_code].extend(selected)
 
-for obj_code, data_list in data_lists_by_object.items():
-    np.save(os.path.join(result_path, obj_code + '.npy'), data_list, allow_pickle=True)
+    # Save current chunk immediately to avoid losing all progress on interruption.
+    for obj_code in object_codes_chunk:
+        np.save(os.path.join(result_path, obj_code + '.npy'), data_lists_by_object[obj_code], allow_pickle=True)
+    print(f"Saved chunk {chunk_idx}/{len(object_code_chunks)} results to {result_path}")
+
 if args.max_e_pen is not None:
-    print(f"Filtered out {skipped_e_pen} grasps with E_pen > {args.max_e_pen}")
-print(f"Skipped {skipped_overflow} grasps after reaching target batch size per object")
+    print(f"Candidates over max E_pen: {skipped_e_pen}")
+    print(f"Used over-max grasps to fill quotas: {used_over_max}")

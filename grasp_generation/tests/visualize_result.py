@@ -64,6 +64,10 @@ if __name__ == '__main__':
                         help='Show object surface points that fall inside collision capsules (black).')
     parser.add_argument('--max_pen_points', type=int, default=2000,
                         help='Max number of penetrating points to render.')
+    parser.add_argument('--show_surface_points', action='store_true',
+                        help='Show sampled object surface points (blue).')
+    parser.add_argument('--max_surface_points', type=int, default=5000,
+                        help='Max number of surface points to render.')
     parser.add_argument('--show_ground', action='store_true',
                         help='Show ground plane at object z_min.')
     args = parser.parse_args()
@@ -290,6 +294,9 @@ if __name__ == '__main__':
     object_model.object_scale_tensor = torch.tensor(
         data_dict['scale'], dtype=torch.float, device=device
     ).reshape(1, 1)
+    center_offset = data_dict.get('object_center_offset', None)
+    if center_offset is not None:
+        center_offset = torch.tensor(center_offset, dtype=torch.float, device=device)
     print(f"   ✓ ObjectModel loaded")
     print(f"   - Object scale: {data_dict['scale']:.4f}")
     if 'object_surface_points' in data_dict:
@@ -405,6 +412,8 @@ if __name__ == '__main__':
     # Object
     _pose = np.eye(4, dtype=np.float32)
     _pose[:3, 3] = vis_offset.detach().cpu().numpy()
+    if center_offset is not None:
+        _pose[:3, 3] = (vis_offset - center_offset).detach().cpu().numpy()
     object_plotly = object_model.get_plotly_data(i=0, color='lightgreen', opacity=0.7, pose=_pose)
     ground_plotly = []
     if args.show_ground:
@@ -420,12 +429,15 @@ if __name__ == '__main__':
         x_max = cx + half
         y_min = cy - half
         y_max = cy + half
-        z = z_min + float(vis_offset[2])
+        shift = vis_offset.clone()
+        if center_offset is not None:
+            shift = shift - center_offset
+        z = z_min + float(shift[2])
         verts = np.array([
-            [x_min, y_min, z],
-            [x_max, y_min, z],
-            [x_max, y_max, z],
-            [x_min, y_max, z],
+            [x_min + float(shift[0]), y_min + float(shift[1]), z],
+            [x_max + float(shift[0]), y_min + float(shift[1]), z],
+            [x_max + float(shift[0]), y_max + float(shift[1]), z],
+            [x_min + float(shift[0]), y_max + float(shift[1]), z],
         ])
         faces = np.array([
             [0, 1, 2],
@@ -440,13 +452,33 @@ if __name__ == '__main__':
         ]
 
     def _get_object_surface_points():
+        shift = vis_offset.clone()
+        if center_offset is not None:
+            shift = shift - center_offset
         if 'object_surface_points' in data_dict:
             pts = torch.tensor(data_dict['object_surface_points'], dtype=torch.float, device=device)
-            return (pts + vis_offset).unsqueeze(0)
+            return (pts + shift).unsqueeze(0)
         object_scale = object_model.object_scale_tensor.flatten().unsqueeze(1).unsqueeze(2)
-        return object_model.surface_points_tensor * object_scale
+        pts = object_model.surface_points_tensor * object_scale
+        return pts + shift
 
     # Combine all
+    surface_points_plotly = []
+    if args.show_surface_points:
+        with torch.no_grad():
+            object_surface_points = _get_object_surface_points()
+            pts = object_surface_points[0]
+            if pts.numel() > 0 and pts.shape[0] > args.max_surface_points:
+                idx = torch.randperm(pts.shape[0])[:args.max_surface_points]
+                pts = pts[idx]
+            if pts.numel() > 0:
+                pts = pts.detach().cpu().numpy()
+                surface_points_plotly = [go.Scatter3d(
+                    x=pts[:, 0], y=pts[:, 1], z=pts[:, 2],
+                    mode='markers', marker=dict(color='blue', size=2),
+                    name='surface_points'
+                )]
+
     pen_points_plotly = []
     if args.show_penetrating_points:
         with torch.no_grad():
@@ -466,7 +498,7 @@ if __name__ == '__main__':
                 )]
 
     fig = go.Figure(hand_st_plotly + hand_en_plotly + object_plotly + ground_plotly +
-                    collision_capsules_plotly + pen_points_plotly)
+                    collision_capsules_plotly + surface_points_plotly + pen_points_plotly)
 
     # Add energy information if available
     if 'energy' in data_dict:
@@ -475,10 +507,16 @@ if __name__ == '__main__':
         E_pen = data_dict['E_pen']
         E_spen = data_dict['E_spen']
         E_joints = data_dict['E_joints']
+        E_ground = data_dict.get('E_ground', None)
         result_text = (f'Index {args.num}  E_fc {E_fc:.6f}  E_dis {E_dis:.8f}  '
                        f'E_pen {E_pen:.8f}  E_spen {E_spen:.8f}  E_joints {E_joints:.6f}')
+        if E_ground is not None:
+            result_text += f'  E_ground {E_ground:.8f}'
         fig.add_annotation(text=result_text, x=0.5, y=0.1, xref='paper', yref='paper')
-        print(f"   - Energy: E_fc={E_fc:.6f}, E_dis={E_dis:.8f}, E_pen={E_pen:.8f}")
+        if E_ground is not None:
+            print(f"   - Energy: E_fc={E_fc:.6f}, E_dis={E_dis:.8f}, E_pen={E_pen:.8f}, E_ground={E_ground:.8f}")
+        else:
+            print(f"   - Energy: E_fc={E_fc:.6f}, E_dis={E_dis:.8f}, E_pen={E_pen:.8f}")
     else:
         print("   - Energy fields not found in result.")
 

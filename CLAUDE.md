@@ -527,3 +527,41 @@ Contact points are selected from pre-defined candidates (contact_points.json):
 - Shadow Hand: pytorch_kinematics, urdf_parser_py
 
 **Key Insight**: Both branches can use Python 3.8 + PyTorch 2.1.0 without needing Isaac Gym for grasp generation.
+
+## ShapeNet Real-Scale Pipeline (Graspable Subset)
+
+We now use a simplified, merged pipeline under `grasp_generation/asset_process/`.
+Scripts (run from `grasp_generation/`):
+
+1. Scale by category name (rough real-world size)
+```
+python asset_process/scale_shapenet_by_name.py   --shapenet_root /mnt/nas/shapeNet/ShapeNetCore.v2/ShapeNetCore.v2   --dst_root /mnt/nas/shapeNet/ShapeNetCore.v2/ShapeNetCore.v2_scaled   --size_map config/shapenet_size_by_name.json
+```
+
+2. Filter graspable categories
+```
+python asset_process/filter_shapenet_categories.py   --src_root /mnt/nas/shapeNet/ShapeNetCore.v2/ShapeNetCore.v2_scaled   --dst_root /mnt/nas/shapeNet/ShapeNetCore.v2/ShapeNetCore.v2_scaled_graspable   --categories "mug,can,earphone,bowl,cap,jar,telephone,bottle,clock,faucet,pistol,helmet,knife,basket,speaker,vessel"
+```
+
+3. Center (no scaling)
+```
+python asset_process/center_shapenet.py   --src_root /mnt/nas/shapeNet/ShapeNetCore.v2/ShapeNetCore.v2_scaled_graspable   --dst_root /mnt/nas/shapeNet/ShapeNetCore.v2/ShapeNetCore.v2_scaled_graspable_centered
+```
+
+4. PLY -> flat OBJ with category-based names (`cat_#`), and `name_map.json`
+```
+python asset_process/ply_to_flat_obj.py   --src_root /mnt/nas/shapeNet/ShapeNetCore.v2/ShapeNetCore.v2_scaled_graspable_centered   --dst_root /mnt/nas/shapeNet/ShapeNetCore.v2/ShapeNetCore.v2_scaled_graspable_obj
+```
+
+5. Decompose to meshdata (CoACD)
+```
+python asset_process/decompose_list.py   --src /mnt/nas/shapeNet/ShapeNetCore.v2/ShapeNetCore.v2_scaled_graspable_obj   --dst /mnt/nas/shapeNet/ShapeNetCore.v2/ShapeNetCore.v2_scaled_graspable_meshdata   --coacd_path /home/jay/gesture_generation/DexGraspNet/asset_process/CoACD/build/main
+
+cd asset_process
+python poolrun.py -p 32
+```
+
+Optional: rotate CoACD from Y-up to Z-up (batch)
+```
+python asset_process/rotate_coacd_yup_to_zup_batch.py   --meshdata_root /mnt/nas/shapeNet/ShapeNetCore.v2/ShapeNetCore.v2_scaled_graspable_meshdata
+```

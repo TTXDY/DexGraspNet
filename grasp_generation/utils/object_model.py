@@ -18,7 +18,7 @@ from torchsdf import index_vertices_by_faces, compute_sdf
 
 class ObjectModel:
 
-    def __init__(self, data_root_path, batch_size_each, num_surface_samples=2000, device="cuda"):
+    def __init__(self, data_root_path, batch_size_each, num_surface_samples=2000, surface_scale=1.0, device="cuda"):
         """
         Create a Object Model
         
@@ -38,6 +38,7 @@ class ObjectModel:
         self.batch_size_each = batch_size_each
         self.data_root_path = data_root_path
         self.num_surface_samples = num_surface_samples
+        self.surface_scale = surface_scale
 
         self.object_code_list = None
         self.object_scale_tensor = None
@@ -73,6 +74,9 @@ class ObjectModel:
             if self.num_surface_samples != 0:
                 vertices = torch.tensor(self.object_mesh_list[-1].vertices, dtype=torch.float, device=self.device)
                 faces = torch.tensor(self.object_mesh_list[-1].faces, dtype=torch.float, device=self.device)
+                if self.surface_scale != 1.0:
+                    centroid = torch.tensor(self.object_mesh_list[-1].centroid, dtype=torch.float, device=self.device)
+                    vertices = (vertices - centroid) * float(self.surface_scale) + centroid
                 mesh = pytorch3d.structures.Meshes(vertices.unsqueeze(0), faces.unsqueeze(0))
                 dense_point_cloud = pytorch3d.ops.sample_points_from_meshes(mesh, num_samples=100 * self.num_surface_samples)
                 surface_points = pytorch3d.ops.sample_farthest_points(dense_point_cloud, K=self.num_surface_samples)[0][0]

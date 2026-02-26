@@ -21,6 +21,25 @@ except ImportError:
     joint_angles_mu_dexhand021 = None
 
 
+def _random_rotation_matrix(max_deg, batch_size, device):
+    if max_deg <= 0:
+        return torch.eye(3, dtype=torch.float, device=device).unsqueeze(0).expand(batch_size, 3, 3)
+    max_rad = math.radians(max_deg)
+    axis = torch.randn(batch_size, 3, device=device)
+    axis = axis / (axis.norm(dim=1, keepdim=True) + 1e-8)
+    angle = torch.rand(batch_size, device=device) * max_rad
+    x, y, z = axis[:, 0], axis[:, 1], axis[:, 2]
+    ca = torch.cos(angle)
+    sa = torch.sin(angle)
+    C = 1 - ca
+    rot = torch.stack([
+        ca + x * x * C, x * y * C - z * sa, x * z * C + y * sa,
+        y * x * C + z * sa, ca + y * y * C, y * z * C - x * sa,
+        z * x * C - y * sa, z * y * C + x * sa, ca + z * z * C
+    ], dim=1).reshape(batch_size, 3, 3)
+    return rot
+
+
 def initialize_convex_hull(hand_model, object_model, args):
     """
     Initialize grasp translation, rotation, joint angles, and contact point indices
@@ -155,6 +174,9 @@ def initialize_convex_hull(hand_model, object_model, args):
                 choices = torch.randint(0, len(rotation_hand_candidates), (batch_size_each,), device=device)
                 hand_model.init_choice_indices[sl] = choices
                 rotation_hand = torch.stack([rotation_hand_candidates[c] for c in choices], dim=0)
+                if args.init_choice_perturb_deg > 0:
+                    perturb = _random_rotation_matrix(args.init_choice_perturb_deg, batch_size_each, device)
+                    rotation_hand = torch.bmm(rotation_hand, perturb)
                 rotation[i * batch_size_each: (i + 1) * batch_size_each] = rotation_hand
             if not args.random_hand:
                 # Apply base position constraints per rotation choice using object bounds.
@@ -208,8 +230,20 @@ def initialize_convex_hull(hand_model, object_model, args):
 
     joint_angles_sigma = args.jitter_strength * (hand_model.joints_upper - hand_model.joints_lower)
     joint_angles = torch.zeros([total_batch_size, hand_model.n_dofs], dtype=torch.float, device=device)
-    for i in range(hand_model.n_dofs):
-        torch.nn.init.trunc_normal_(joint_angles[:, i], joint_angles_mu[i], joint_angles_sigma[i], hand_model.joints_lower[i] - 1e-6, hand_model.joints_upper[i] + 1e-6)
+
+    if hand_model_type == 'HandModelDexHand021':
+        # Randomize thumb spread mean within a range (degrees) per sample.
+        spread_min = math.radians(args.thumb_spread_deg_min)
+        spread_max = math.radians(args.thumb_spread_deg_max)
+        mu_batch = joint_angles_mu.unsqueeze(0).expand(total_batch_size, -1).clone()
+        mu_batch[:, 0] = spread_min + (spread_max - spread_min) * torch.rand(total_batch_size, device=device)
+        sigma_batch = joint_angles_sigma.unsqueeze(0).expand_as(mu_batch)
+        joint_angles = torch.normal(mu_batch, sigma_batch)
+        joint_angles = torch.max(joint_angles, hand_model.joints_lower.unsqueeze(0) - 1e-6)
+        joint_angles = torch.min(joint_angles, hand_model.joints_upper.unsqueeze(0) + 1e-6)
+    else:
+        for i in range(hand_model.n_dofs):
+            torch.nn.init.trunc_normal_(joint_angles[:, i], joint_angles_mu[i], joint_angles_sigma[i], hand_model.joints_lower[i] - 1e-6, hand_model.joints_upper[i] + 1e-6)
 
     hand_pose = torch.cat([
         translation,
@@ -220,6 +254,38 @@ def initialize_convex_hull(hand_model, object_model, args):
 
     # initialize contact point indices
 
-    contact_point_indices = torch.randint(hand_model.n_contact_candidates, size=[total_batch_size, args.n_contact], device=device)
+    if hand_model_type == 'HandModelDexHand021' and args.n_contact > 0:
+        # Default random contacts for dexhand021:
+        # reserve 1 slot for thumb links, and sample the rest from non-thumb links.
+        thumb_link_indices = []
+        for link_name, link_idx in hand_model.link_name_to_link_index.items():
+            if link_name.startswith("r_f_link1_"):
+                thumb_link_indices.append(link_idx)
+
+        global_link_idx = hand_model.global_index_to_link_index
+        if thumb_link_indices:
+            thumb_link_tensor = torch.tensor(thumb_link_indices, device=device)
+            thumb_mask = (global_link_idx.unsqueeze(1) == thumb_link_tensor.unsqueeze(0)).any(dim=1)
+            thumb_candidates = torch.nonzero(thumb_mask, as_tuple=False).squeeze(1)
+            other_candidates = torch.nonzero(~thumb_mask, as_tuple=False).squeeze(1)
+        else:
+            thumb_candidates = torch.empty(0, dtype=torch.long, device=device)
+            other_candidates = torch.arange(hand_model.n_contact_candidates, device=device)
+
+        contact_point_indices = torch.zeros([total_batch_size, args.n_contact], dtype=torch.long, device=device)
+
+        if thumb_candidates.numel() > 0:
+            thumb_rand = torch.randint(0, thumb_candidates.numel(), (total_batch_size,), device=device)
+            contact_point_indices[:, 0] = thumb_candidates[thumb_rand]
+        else:
+            # Fallback: sample from all if thumb candidates are unavailable.
+            contact_point_indices[:, 0] = torch.randint(hand_model.n_contact_candidates, (total_batch_size,), device=device)
+
+        if args.n_contact > 1:
+            pool = other_candidates if other_candidates.numel() > 0 else torch.arange(hand_model.n_contact_candidates, device=device)
+            other_rand = torch.randint(0, pool.numel(), (total_batch_size, args.n_contact - 1), device=device)
+            contact_point_indices[:, 1:] = pool[other_rand]
+    else:
+        contact_point_indices = torch.randint(hand_model.n_contact_candidates, size=[total_batch_size, args.n_contact], device=device)
 
     hand_model.set_parameters(hand_pose, contact_point_indices)
